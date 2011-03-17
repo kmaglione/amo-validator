@@ -18,6 +18,7 @@ def trace_member(traverser, node):
         # If we've got an XPCOM wildcard, just return the base, minus the WC
         if base.is_global and \
                 "xpcom_wildcard" in base.value:
+            base.value = base.value.copy()
             del base.value["xpcom_wildcard"]
             return base
 
@@ -280,7 +281,10 @@ def _call_expression(traverser, node):
         dangerous = member.value["dangerous"]
 
         t = traverser._traverse_node
-        result = dangerous(a=args, t=t)
+        if 'e' in dangerous.func_code.co_varnames:
+            result = dangerous(a=args, t=t, e=traverser.err)
+        else:
+            result = dangerous(a=args, t=t)
         if result:
             # Generate a string representation of the params
             params = ", ".join([str(t(p).get_literal_value()) for p in args])
@@ -342,6 +346,12 @@ def _call_expression(traverser, node):
                                   line=traverser.line,
                                   column=traverser.position,
                                   context=traverser.context)
+        elif identifier_name in ("getInterface", "QueryInterface") and \
+             simple_args:
+            from call_definitions import xpcom_constructor
+            return xpcom_constructor(identifier_name)(wrapper=member,
+                                                      arguments=args,
+                                                      traverser=traverser)
 
     if member.is_global and "return" in member.value:
         return member.value["return"](wrapper=member,
@@ -615,4 +625,5 @@ def _get_as_num(value):
 
     except:
         return 0
+
 
