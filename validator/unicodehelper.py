@@ -19,7 +19,7 @@ COMMON_ENCODINGS = ('latin_1', 'utf-16')
 NON_ASCII_FILTER = re.compile(r'[^\t\r\n\x20-\x7f]+')
 
 
-def decode(data):
+def decode(data, replace=True):
     """
     Decode data employing some charset detection and including unicode BOM
     stripping.
@@ -46,5 +46,6 @@ def decode(data):
         except UnicodeDecodeError:
             pass
 
-    # Anything else gets filtered.
-    return NON_ASCII_FILTER.sub('', data).decode('ascii', errors='replace')
+    if replace:
+        # Anything else gets filtered.
+        return NON_ASCII_FILTER.sub('', data).decode('ascii', errors='replace')
