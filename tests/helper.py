@@ -1,6 +1,9 @@
 import collections
 import sys
 
+# Import this first so we get the same order of imports as runtime,
+# and avoid import loops.
+import validator.validate  # noqa
 from validator.submain import populate_chrome_manifest
 from validator.rdf import RDFParser
 from validator.xpi import XPIManager
