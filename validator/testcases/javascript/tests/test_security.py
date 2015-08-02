@@ -1,5 +1,3 @@
-from nose.plugins.skip import SkipTest
-
 from tests.helper import Contains, Exists, Matches, NonEmpty, RegexTestCase
 from tests.js_helper import TestCase
 

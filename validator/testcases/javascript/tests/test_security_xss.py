@@ -1,4 +1,4 @@
-from nose.plugins.skip import SkipTest
+import pytest
 
 from tests.helper import Contains, Exists, Matches, NonEmpty, RegexTestCase
 from tests.js_helper import TestCase
@@ -52,7 +52,7 @@ class TestTemplates(TestCase, RegexTestCase):
                      'id': Contains('unsafe-template-escapes')})
 
 
-class BaseTestHTML(TestCase):
+class BaseTestHTML(object):
     """Tests for various HTML-related security issues."""
 
     def set_html(self, html):
@@ -102,22 +102,22 @@ class BaseTestHTML(TestCase):
              'description': Matches('not been adequately sanitized')})
 
 
-class TestInnerHTML(BaseTestHTML):
+class TestInnerHTML(BaseTestHTML, TestCase):
     method = 'innerHTML'
     code_pattern = 'foo.innerHTML = {html};'
 
 
-class TestOuterHTML(BaseTestHTML):
+class TestOuterHTML(BaseTestHTML, TestCase):
     method = 'outerHTML'
     code_pattern = 'foo.outerHTML = {html};'
 
 
-class TestInsertAdjacentHTML(BaseTestHTML):
+class TestInsertAdjacentHTML(BaseTestHTML, TestCase):
     method = 'insertAdjacentHTML'
     code_pattern = 'foo.insertAdjacentHTML("beforebegin", {html});'
 
 
-class TestDocumentWrite(BaseTestHTML):
+class TestDocumentWrite(BaseTestHTML, TestCase):
     method = 'document.write()'
     code_pattern = 'document.write({html});'
 
@@ -245,11 +245,10 @@ class TestEval(TestCase):
                 self.run_script(pattern.format(arg))
                 self.assert_warnings(self.BASE_MESSAGE)
 
+    @pytest.mark.xfail(reason='Not implemented')
     def test_eval_literal(self):
         """Test that evaluating a literal results in the appropriate warnings
         for the literal's contents."""
-
-        raise SkipTest('Not implemented.')
 
         for pattern in ('eval({code})', 'Function({code})',
                         'Function("foo", {code})'):
@@ -287,11 +286,10 @@ class TestEval(TestCase):
                 self.run_script('{0}; {1}(x, 100)'.format(decl, setTimeout))
                 self.assert_silent()
 
+    @pytest.mark.xfail(reason='Not implemented')
     def test_setTimeout_literal(self):
         """Test that evaluating a literal results in the appropriate warnings
         for the literal's contents."""
-
-        raise SkipTest('Not implemented.')
 
         for pattern in 'setTimeout({code}, 100)', 'setInterval({code}, 100)':
             self.check_eval_literal(pattern)

@@ -328,9 +328,8 @@ def test_subpackage_metadata_preserved():
     submain.test_package(err1, xpi1, 'jetpack-1.8-outdated.xpi')
     content.test_packed_packages(err2, xpi2)
 
-    assert 'sub_packages' in err2.metadata
-    eq_(err1.metadata, err2.metadata['sub_packages']
-                           .get('thing.xpi'))
+    assert "sub_packages" in err2.metadata
+    assert err1.metadata == err2.metadata["sub_packages"].get("thing.xpi")
 
 
 def test_make_script_absolute():

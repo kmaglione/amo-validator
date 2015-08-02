@@ -2,8 +2,8 @@ import sys
 
 from nose.tools import eq_
 
-import helper
-from helper import MockXPI
+from . import helper
+from .helper import MockXPI
 from validator.errorbundler import ErrorBundle
 from validator.outputhandlers.shellcolors import OutputHandler
 import validator.testcases.content

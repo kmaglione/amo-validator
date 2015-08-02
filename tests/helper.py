@@ -2,6 +2,7 @@ import collections
 import itertools
 import re
 import sys
+import unittest
 
 from mock import sentinel
 
@@ -83,7 +84,7 @@ class Matches(Matcher):
         return bool(re.search(self.value, other))
 
 
-class TestCase(object):
+class TestCase(unittest.TestCase):
     # Message IDs which are expected to have no context.
     NO_CONTEXT_WHITELIST = {
         ('fake', 'test', 'message'),
