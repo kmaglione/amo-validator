@@ -7,8 +7,8 @@ from nose.tools import eq_
 from .helper import RegexTestCase
 from .js_helper import TestCase
 
-from validator.testcases.regex.javascript import (PREFERENCE_ERROR_ID,
-                                                  maybe_tuple)
+from validator.errorbundler import maybe_tuple
+from validator.testcases.javascript.preferences import PREFERENCE_ERROR_ID
 
 
 class TestSearchService(TestCase, RegexTestCase):
@@ -284,8 +284,7 @@ class TestSearchService(TestCase, RegexTestCase):
 
         warning = {'id': ('testcases_javascript_actions',
                           'predefinedentities', 'proxy_filter'),
-                   'signing_severity': 'low',
-                   'editors_only': True}
+                   'signing_severity': 'low'}
 
         self.run_script("""
             Cc[""].getService(Ci.nsIProtocolProxyService)
@@ -338,13 +337,19 @@ class TestSearchService(TestCase, RegexTestCase):
     def test_ctypes(self):
         """Tests that usage of `ctypes` generates warnings."""
 
-        self.run_script("""
-            ctypes.open("libc.so.6");
-        """)
-        self.assert_failed(with_warnings=[
-            {'id': ('js', 'traverser', 'dangerous_global'),
-             'editors_only': True,
-             'signing_severity': 'high'}])
+        scripts = (
+            "ctypes.open('libc.so.6');",
+            "Cu.import('resource://gre/modules/ctypes.jsm?foo');",
+            "Components.utils.import('resource:///modules/ctypes.jsm');",
+        )
+
+        for script in scripts:
+            self.setup_err()
+            self.run_script(script)
+            self.assert_failed(with_warnings=[
+                {'id': ('testcases_javascript', 'security', 'ctypes'),
+                 'editors_only': True,
+                 'signing_severity': 'high'}])
 
     def test_nsIProcess(self):
         """Tests that usage of `nsIProcess` generates warnings."""

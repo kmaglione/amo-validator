@@ -49,16 +49,6 @@ def test_js_categories_gecko2():
         eq_(msg[key], value)
 
 
-def test_js_categories_gecko1():
-    """Test that JS categories raise problems for space-delimited values."""
-    c = ChromeManifest('category JavaScript global foo bar', 'chrome.manifest')
-    err = ErrorBundle()
-    err.save_resource('chrome.manifest', c)
-
-    tc_chromemanifest.test_categories(err)
-    assert err.failed()
-
-
 def test_fail_resourcemodules():
     """'resource modules' should fail validation."""
     c = ChromeManifest('resource modules foo', 'chrome.manifest')
@@ -119,4 +109,3 @@ def test_content_instructions_trailing_slash():
     tc_chromemanifest.test_content_instructions(err)
     assert not err.failed()
     assert not err.notices
-

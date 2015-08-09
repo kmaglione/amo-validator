@@ -5,8 +5,8 @@ from validator.constants import (FIREFOX_GUID, FENNEC_GUID,
 
 # Compatibility app/version ranges:
 
-def _build_definition(maj_version_num, firefox=True, fennec=True,
-                      thunderbird=True, android=True):
+def build_definition(maj_version_num, firefox=False, fennec=False,
+                     thunderbird=False, android=False):
     definition = {}
     app_version_range = (
         lambda app: version_range(app, '%d.0a1' % maj_version_num,
@@ -21,15 +21,3 @@ def _build_definition(maj_version_num, firefox=True, fennec=True,
         definition[ANDROID_GUID] = app_version_range('android')
 
     return definition
-
-
-FX38_DEFINITION = _build_definition(38)
-FX39_DEFINITION = _build_definition(39)
-FX40_DEFINITION = _build_definition(40)
-
-_tb_definition = (lambda ver:
-    _build_definition(ver, firefox=False, fennec=False, android=False))
-
-TB29_DEFINITION = _tb_definition(29)
-TB30_DEFINITION = _tb_definition(30)
-TB31_DEFINITION = _tb_definition(31)

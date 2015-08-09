@@ -1,5 +1,5 @@
-from ..helper import RegexTestCase
-from ..js_helper import TestCase as JSTestCase
+from tests.helper import RegexTestCase
+from tests.js_helper import TestCase as JSTestCase
 
 
 class CompatTestCase(JSTestCase, RegexTestCase):

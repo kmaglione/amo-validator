@@ -8,6 +8,7 @@ import instanceactions
 from validator.constants import (BUGZILLA_BUG, DESCRIPTION_TYPES, FENNEC_GUID,
                                  FIREFOX_GUID, MAX_STR_SIZE)
 from validator.decorator import version_range
+from validator.testcases.regex import validate_string
 from jstypes import JSArray, JSContext, JSLiteral, JSObject, JSWrapper
 
 
@@ -410,8 +411,6 @@ def test_literal(traverser, wrapper):
     """
     value = wrapper.get_literal_value()
     if isinstance(value, basestring):
-        # Local import to prevent import loop.
-        from validator.testcases.regex import validate_string
         validate_string(value, traverser=traverser, wrapper=wrapper)
 
 
@@ -481,117 +480,6 @@ def _call_expression(traverser, node):
         return member.value['return'](wrapper=member, arguments=args,
                                       traverser=traverser)
     return JSWrapper(JSObject(), dirty=True, traverser=traverser)
-
-
-def _call_settimeout(a, t, e):
-    """
-    Handler for setTimeout and setInterval. Should determine whether a[0]
-    is a lambda function or a string. Strings are banned, lambda functions are
-    ok. Since we can't do reliable type testing on other variables, we flag
-    those, too.
-    """
-
-    if not a:
-        return
-
-    if a[0]['type'] in ('FunctionExpression', 'ArrowFunctionExpression'):
-        return
-
-    if t(a[0]).callable:
-        return
-
-    return {'err_id': ('javascript', 'dangerous_global', 'eval'),
-            'description':
-                'In order to prevent vulnerabilities, the `setTimeout` '
-                'and `setInterval` functions should be called only with '
-                'function expressions as their first argument.',
-            'signing_help': (
-                'Please do not ever call `setTimeout` or `setInterval` with '
-                'string arguments. If you are passing a function which is '
-                'not being correctly detected as such, please consider '
-                'passing a closure or arrow function, which in turn calls '
-                'the original function.'),
-            'signing_severity': 'high'}
-
-
-def _call_require(a, t, e):
-    """
-    Tests for unsafe uses of `require()` in SDK add-ons.
-    """
-
-    args, traverse, err = a, t, e
-
-    if not err.metadata.get('is_jetpack') and len(args):
-        return
-
-    module = traverse(args[0]).get_literal_value()
-    if not isinstance(module, basestring):
-        return
-
-    if module.startswith('sdk/'):
-        module = module[len('sdk/'):]
-
-    LOW_LEVEL = {
-        # Added from bugs 689340, 731109
-        'chrome', 'window-utils', 'observer-service',
-        # Added from bug 845492
-        'window/utils', 'sdk/window/utils', 'sdk/deprecated/window-utils',
-        'tab/utils', 'sdk/tab/utils',
-        'system/events', 'sdk/system/events',
-    }
-
-    if module in LOW_LEVEL:
-        err.metadata['requires_chrome'] = True
-        return {'warning': 'Usage of low-level or non-SDK interface',
-                'description': 'Your add-on uses an interface which bypasses '
-                               'the high-level protections of the add-on SDK. '
-                               'This interface should be avoided, and its use '
-                               'may significantly complicate your review '
-                               'process.'}
-
-    if module == 'widget':
-        return {'warning': 'Use of deprecated SDK module',
-                'description':
-                    "The 'widget' module has been deprecated due to a number "
-                    'of performance and usability issues, and has been '
-                    'removed from the SDK as of Firefox 40. Please use the '
-                    "'sdk/ui/button/action' or 'sdk/ui/button/toggle' module "
-                    'instead. See '
-                    'https://developer.mozilla.org/Add-ons/SDK/High-Level_APIs'
-                    '/ui for more information.'}
-
-
-def _call_create_pref(a, t, e):
-    """
-    Handler for pref() and user_pref() calls in defaults/preferences/*.js files
-    to ensure that they don't touch preferences outside of the "extensions."
-    branch.
-    """
-
-    # We really need to clean up the arguments passed to these functions.
-    traverser = t.im_self
-
-    if not traverser.filename.startswith('defaults/preferences/') or not a:
-        return
-
-    instanceactions.set_preference(JSWrapper(JSLiteral(None),
-                                             traverser=traverser),
-                                   a, traverser)
-
-    value = _get_as_str(t(a[0]))
-    return test_preference(value)
-
-
-def test_preference(value):
-    for branch in 'extensions.', 'services.sync.prefs.sync.extensions.':
-        if value.startswith(branch) and value.rindex('.') > len(branch):
-            return
-
-    return ('Extensions should not alter preferences outside of the '
-            "'extensions.' preference branch. Please make sure that "
-            "all of your extension's preferences are prefixed with "
-            "'extensions.add-on-name.', where 'add-on-name' is a "
-            'distinct string unique to and indicative of your add-on.')
 
 
 def _readonly_top(traverser, right, node_right):

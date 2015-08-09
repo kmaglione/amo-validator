@@ -1,4 +1,5 @@
 from validator import decorator
+from validator.testcases.regex.javascript import STRING_REGEXPS
 
 
 MANIFEST_URI = 'https://developer.mozilla.org/en/XUL_Tutorial/Manifest_Files'
@@ -32,6 +33,11 @@ DANGEROUS_CATEGORY_WARNING = {
     'editors_only': True}
 
 
+STRING_REGEXPS.append(
+    (DANGEROUS_CATEGORIES, DANGEROUS_CATEGORY_WARNING)
+)
+
+
 @decorator.register_test(tier=2, simple=True)
 def test_categories(err):
     """Test for categories in the chrome.manifest file."""
@@ -42,10 +48,7 @@ def test_categories(err):
 
     for triple in chrome.triples:
         if (triple['subject'] == 'category' and
-            (triple['predicate'] in DANGEROUS_CATEGORIES or
-             (triple['predicate'] == 'JavaScript' and
-              (triple['object'].startswith('global ') or
-               triple['object'].startswith('DOM '))))):
+                triple['predicate'] in DANGEROUS_CATEGORIES):
             err.warning(filename=triple['filename'],
                         line=triple['line'],
                         context=triple['context'],

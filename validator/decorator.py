@@ -1,3 +1,4 @@
+import importlib
 import logging
 
 import validator.constants
@@ -9,6 +10,7 @@ log = logging.getLogger('amo.validator')
 
 TEST_TIERS = {}
 CLEANUP_FUNCTIONS = []
+POST_INIT_FUNCTIONS = []
 
 
 def register_test(tier=1, expected_type=None, simple=False, versions=None):
@@ -56,6 +58,33 @@ def cleanup():
             fn()
         except Exception, e:
             log.exception('Error during cleanup: %s' % e)
+
+
+def post_init(fn):
+    """Register a function to be called at the end of initialization, once
+    all test modules have been loaded."""
+    POST_INIT_FUNCTIONS.append(fn)
+    return fn
+
+
+def define_post_init(fn):
+    """Create a post_init callback to define a global with this function's
+    return value."""
+    @post_init
+    def do_post_init():
+        module = importlib.import_module(fn.__module__)
+        setattr(module, fn.__name__, fn())
+
+    return None
+
+
+def do_post_init():
+    """Call each post init function, in the reverse order in which they were
+    added."""
+    global POST_INIT_FUNCTIONS
+    for fn in reversed(POST_INIT_FUNCTIONS):
+        fn()
+    POST_INIT_FUNCTIONS = ()  # Prevent late callers from failing silently.
 
 
 def get_tiers():

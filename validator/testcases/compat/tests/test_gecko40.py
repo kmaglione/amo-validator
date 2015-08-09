@@ -1,5 +1,5 @@
-from helper import CompatTestCase
-from validator.compat import FX40_DEFINITION
+from .helper import CompatTestCase
+from validator.testcases.compat.firefox40 import FX40_DEFINITION
 
 
 class TestFX40Compat(CompatTestCase):

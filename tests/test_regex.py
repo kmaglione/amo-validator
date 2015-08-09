@@ -203,7 +203,8 @@ class TestRegexTest(TestCase):
         and passed the correct match text."""
 
         tester = RegexTestBase((
-            (r'fo+o-b.r', {'warning': 'Wa-{match}-ning',
+            (r'fo+o-b.r', {'err_id': ('fake', 'test', 'message'),
+                           'warning': 'Wa-{match}-ning',
                            'description': 'Des-{match}-cription',
                            'signing_help': ('Sign-{match}-ing',
                                             'he-{match}-lp')}),
@@ -220,15 +221,17 @@ class TestRegexTest(TestCase):
     def test_err_id(self):
         """Test that an appropriate error ID is added for a test pattern."""
 
+        ID = ('testcases_regex', 'basic', 'Y.. k.ll.d my f.th.r.')
         tester = RegexTestBase((
             (r'Y.. k.ll.d my f.th.r.', {'warning': 'Prepare to'}),
         ))
 
         tester.test('Montoya. You killed my father.', err=self.err)
 
+        self.NO_CONTEXT_WHITELIST.add(ID)
         self.assert_failed(with_warnings=[
             {'message': 'Prepare to',
-             'id': ('testcases_regex', 'basic', 'Y.. k.ll.d my f.th.r.')},
+             'id': ID},
         ])
 
 

@@ -3,58 +3,12 @@ import re
 
 import actions
 import predefinedentities
-from jstypes import JSArray, JSObject, JSWrapper
+from jstypes import JSArray, JSWrapper
 
 # Function prototypes should implement the following:
 #  wrapper : The JSWrapper instace that is being called
 #  arguments : A list of argument nodes; untraversed
 #  traverser : The current traverser object
-
-
-def webbrowserpersist(wrapper, arguments, traverser):
-    """
-    Most nsIWebBrowserPersist should no longer be used, in favor of the new
-    Downloads.jsm interfaces.
-    """
-    traverser.err.warning(
-        err_id=('testcases_javascript_call_definititions',
-                'webbrowserpersist'),
-        warning='nsIWebBrowserPersist should no longer be used',
-        description=('Most nsIWebBrowserPersist methods have been '
-                     'superseded by simpler methods in Downloads.jsm, namely '
-                     '`Downloads.fetch` and `Downloads.createDownload`. See '
-                     'http://mzl.la/downloads-jsm for more information.'),
-        filename=traverser.filename,
-        line=traverser.line,
-        column=traverser.position,
-        context=traverser.context,
-        tier=4)
-
-
-def webbrowserpersist_saveuri(wrapper, arguments, traverser):
-    """
-    nsIWebBrowserPersist.saveURI requires a valid privacy context as
-    of Firefox 19
-    """
-    if len(arguments) >= 7:
-        load_context = traverser._traverse_node(arguments[6])
-        if load_context.get_literal_value() is None:
-            traverser.err.warning(
-                err_id=('testcases_javascript_call_definititions',
-                        'webbrowserpersist_saveuri'),
-                warning=('saveURI should not be called with a null load '
-                         'context'),
-                description=('While nsIWebBrowserPersist.saveURI accepts null '
-                             'in place of a privacy context, this usage is '
-                             'acceptable only when no appropriate load '
-                             'context exists.'),
-                filename=traverser.filename,
-                line=traverser.line,
-                column=traverser.position,
-                context=traverser.context,
-                tier=4)
-
-    webbrowserpersist(wrapper, arguments, traverser)
 
 
 def xpcom_constructor(method, extend=False, mutate=False, pretraversed=False):
@@ -85,7 +39,8 @@ def xpcom_constructor(method, extend=False, mutate=False, pretraversed=False):
         if extend or mutate:
             # FIXME: There should be a way to get this without
             # traversing the call chain twice.
-            parent = actions.trace_member(traverser, wrapper['callee']['object'])
+            parent = actions.trace_member(traverser,
+                                          wrapper['callee']['object'])
 
             if mutate and not (parent.is_global and
                                isinstance(parent.value, dict) and
@@ -197,7 +152,7 @@ def python_wrap(func, args, nargs=False):
                 params.append(_process_literal(args[0], literal))
 
         traverser._debug('Calling wrapped Python function with: (%s)' %
-                             ', '.join(map(str, params)))
+                         ', '.join(map(str, params)))
         try:
             output = func(*params)
         except (ValueError, TypeError, OverflowError):
@@ -249,80 +204,6 @@ def math_round(wrapper, arguments, traverser):
     return JSWrapper(arg, traverser=traverser)
 
 
-def nsIJSON_deprec(wrapper, arguments, traverser):
-    """Throw a compatibility error about removed XPCOM methods."""
-    traverser.notice(
-        err_id=('testcases_javascript_calldefinitions', 'nsIJSON',
-                'deprec'),
-        notice='Deprecated nsIJSON methods in use.',
-        description=('The `encode` and `decode` methods in nsIJSON have been '
-                     'deprecated in Gecko 7. You can use the methods in the '
-                     'global JSON object instead. See %s for more '
-                     'information.') %
-                         'https://developer.mozilla.org/En/Using_native_JSON')
-
-    return JSWrapper(JSObject(), traverser=traverser, dirty=True)
-
-
-def js_wrap(wrapper, arguments, traverser):
-    """Return the wrapped variant of an unwrapped JSObject."""
-    if not arguments:
-        traverser._debug('WRAP:NO ARGS')
-        return
-
-    traverser._debug('WRAPPING OBJECT')
-    obj = traverser._traverse_node(arguments[0])
-    if obj.value is None:
-        traverser._debug('WRAPPING OBJECT>>NOTHING TO WRAP')
-        return JSWrapper(JSObject(), traverser=traverser)
-
-    if len(arguments) > 1:
-        traverser.warning(
-            err_id=('testcases_js_xpcom', 'xpcnativewrapper', 'shallow'),
-            warning='Shallow XPCOM wrappers should not be used',
-            description='Shallow XPCOM wrappers are seldom necessary and '
-                        'should not be used. Please use deep wrappers '
-                        'instead.',
-            signing_help='Extensions making use of shallow wrappers will not '
-                         'be accepted for automated signing. Please remove '
-                         'the second and subsequent arguments of any calls '
-                         'to `XPCNativeWrapper`, as well as any code which '
-                         'applies `XPCNativeWrapper` to properties obtained '
-                         'from these shallowly wrapped objects.',
-            signing_severity='high')
-        # Do not mark shallow wrappers as not unwrapped.
-        return obj
-
-    if obj.is_global:
-        # Why are we changing the original object? XPCNativeWrapper
-        # does not alter its arguments.
-        obj.value['is_unwrapped'] = False
-    else:
-        obj.value.is_unwrapped = False
-
-    return obj
-
-
-def js_unwrap(wrapper, arguments, traverser):
-    """Return the unwrapped variant of an unwrapped JSObject."""
-    if not arguments:
-        traverser._debug('UNWRAP:NO ARGS')
-        return
-
-    traverser._debug('UNWRAPPING OBJECT')
-    obj = traverser._traverse_node(arguments[0])
-    if obj.value is None:
-        traverser._debug('UNWRAPPING OBJECT>>NOTHING TO UNWRAP')
-        return JSWrapper(JSObject(unwrapped=True), traverser=traverser)
-
-    if obj.is_global:
-        obj.value['is_unwrapped'] = True
-    else:
-        obj.value.is_unwrapped = True
-
-    return obj
-
-
 def open_in_chrome_context(uri, method, traverser):
     if not uri.is_literal():
         traverser.err.notice(
@@ -340,12 +221,8 @@ def open_in_chrome_context(uri, method, traverser):
     remote_url = re.compile(r'^(https?|ftp|data):(//)?', re.I)
     uri = unicode(uri.get_literal_value())
     if uri.startswith('//') or remote_url.match(uri):
-        traverser.err.warning(
+        traverser.warning(
             err_id=('js', 'instanceactions', '%s_remote_uri' % method),
             warning='`%s` called with non-local URI.' % method,
             description='Calling `%s` with a non-local URI will result in the '
-                        'dialog being opened with chrome privileges.' % method,
-            filename=traverser.filename,
-            line=traverser.line,
-            column=traverser.position,
-            context=traverser.context)
+                        'dialog being opened with chrome privileges.' % method)

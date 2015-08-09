@@ -8,6 +8,8 @@ from validator.errorbundler import ErrorBundle
 from validator.outputhandlers.shellcolors import OutputHandler
 import validator.testcases.content
 import validator.testcases.scripting
+
+
 validator.testcases.scripting.traverser.IN_TESTS = True
 
 
@@ -103,6 +105,7 @@ class TestCase(helper.TestCase):
         if bootstrap:
             self.err.save_resource('em:bootstrap', 'true')
 
+        print 'Run script: %r' % script
         validator.testcases.content._process_file(self.err, MockXPI(),
                                                   self.file_path, script,
                                                   self.file_path.lower(),
@@ -111,15 +114,17 @@ class TestCase(helper.TestCase):
             print self.err.final_context.output()
             self.final_context = self.err.final_context
 
+    def get_wrapper(self, name):
+        """Return the wrapper of a variable from the final script context."""
+        assert name in self.final_context.data, (
+            'Expected variable %r not in final context' % name)
+        return self.final_context.data[name]
+
     def get_var(self, name):
         """
         Return the value of a variable from the final script context.
         """
-        try:
-            return self.final_context.data[name].get_literal_value()
-        except KeyError:
-            raise ('Test seeking variable (%s) not found in final context.' %
-                       name)
+        return self.get_wrapper(name).get_literal_value()
 
     def assert_var_eq(self, name, value):
         """
@@ -127,4 +132,3 @@ class TestCase(helper.TestCase):
         contains the value specified.
         """
         eq_(self.get_var(name), value)
-

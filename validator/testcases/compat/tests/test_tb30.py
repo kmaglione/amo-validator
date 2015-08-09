@@ -1,5 +1,5 @@
-from helper import CompatTestCase
-from validator.compat import TB30_DEFINITION
+from .helper import CompatTestCase
+from validator.testcases.compat.thunderbird30 import TB30_DEFINITION
 
 
 class TestTB30Compat(CompatTestCase):

@@ -488,10 +488,10 @@ class TestReport(TestCase):
         self.assert_failed(with_warnings=[{'id': ('foo', 'bar', 'quux')}])
 
         self.setup_err()
-        self.err.report({'err_id': ('foo', 'bar', 'baz'),
+        self.err.report({'err_id': ('a', 'b', 'c'),
                          'warning': 'Hello.'},
-                        {'err_id': ('a', 'b', 'c')})
-        self.assert_failed(with_warnings=[{'id': ('a', 'b', 'c')}])
+                        {'err_id': ('foo', 'bar', 'quux')})
+        self.assert_failed(with_warnings=[{'id': ('foo', 'bar', 'quux')}])
 
         with assert_raises(AssertionError):
             self.err.report({'err_id': 'foo'}, {'err_id': 'quux'})
