@@ -6,7 +6,8 @@ from nose.tools import eq_
 from .js_helper import _do_real_test_raw as _test_js
 
 
-@mock.patch('validator.testcases.javascript.traverser.JSWrapper')
+@mock.patch('validator.testcases.javascript.traverser.JSWrapper.__init__')
+@mock.patch('validator.constants.IN_TESTS', False)
 def test_js_traversal_error_reporting(JSWrapper):
     """Test that an internal error in JS traversal is correctly reported as
     a system error."""

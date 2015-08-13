@@ -2,9 +2,8 @@ from functools import partial
 import math
 
 from validator.decorator import post_init
-from .actions import _get_as_str
 from .call_definitions import python_wrap, xpcom_constructor
-from .jstypes import JSWrapper
+from .jstypes import JSWrapper, Undefined
 from . import actions, call_definitions
 
 
@@ -67,18 +66,18 @@ def build_quick_xpcom(method, interface, traverser, wrapper=False):
         # this duplication.
         iface = interface_obj(iface)
         iface = traverser._build_global('QueryInterface',
-                                        iface.value['xpcom_map']())
+                                        iface.hooks['xpcom_map']())
 
-        obj.value = obj.value.copy()
+        obj.hooks = obj.hooks.copy()
 
-        value = obj.value['value'].copy()
-        value.update(iface.value['value'])
+        value = obj.hooks['value'].copy()
+        value.update(iface.hooks['value'])
 
-        obj.value.update(iface.value)
-        obj.value['value'] = value
+        obj.hooks.update(iface.hooks)
+        obj.hooks['value'] = value
 
     if isinstance(obj, JSWrapper) and not wrapper:
-        obj = obj.value
+        return obj.hooks
     return obj
 
 
@@ -151,7 +150,7 @@ GLOBAL_ENTITIES = {
               u'loadOverlay':
                   {'dangerous':
                        lambda a, t, e:
-                           not a or not _get_as_str(t(a[0])).lower()
+                           not a or not t(a[0]).as_str().lower()
                                .startswith(('chrome:', 'resource:'))}}},
 
     u'encodeURI': {'readonly': True},
@@ -275,8 +274,8 @@ GLOBAL_ENTITIES = {
     # Global properties are inherently read-only, though this formalizes it.
     u'Infinity':
         {'value': lambda t: JSWrapper(float('inf'), traverser=t)},
-    u'NaN': {'readonly': True},
-    u'undefined': {'readonly': True},
+    u'NaN': {'readonly': True, 'literal': lambda t: float('nan')},
+    u'undefined': {'readonly': True, 'literal': lambda t: Undefined},
 
     u'innerHeight': {'readonly': False},
     u'innerWidth': {'readonly': False},
@@ -285,19 +284,16 @@ GLOBAL_ENTITIES = {
     u'top': {'readonly': actions._readonly_top},
 
     u'content':
-        {'context': 'content',
-         'value':
+        {'value':
              {u'document': CONTENT_DOCUMENT}},
     u'contentWindow':
-        {'context': 'content',
-         'value':
+        {'value':
              lambda t: {'value': GLOBAL_ENTITIES}},
     u'_content': {'value': lambda t: GLOBAL_ENTITIES[u'content']},
     u'gBrowser':
         {'value':
              {u'contentDocument':
-                  {'context': 'content',
-                   'value': CONTENT_DOCUMENT},
+                  {'value': CONTENT_DOCUMENT},
               u'contentWindow':
                   {'value':
                        lambda t: {'value': GLOBAL_ENTITIES}},

@@ -9,7 +9,6 @@ from .predefinedentities import (CONTRACT_ENTITIES, GLOBAL_ENTITIES,
                                  build_quick_xpcom, hook_global,
                                  hook_interface)
 from .preferences import BANNED_PREF_BRANCHES, BANNED_PREF_REGEXPS
-from . import actions
 
 
 INTERFACE_ENTITIES.update({
@@ -56,7 +55,7 @@ def check_import(a, t, e):
     args = map(traverse_node, a)
 
     if len(args) > 0:
-        module = actions._get_as_str(args[0])
+        module = args[0].as_str()
         # Strip any query parameters.
         module = re.sub(r'\?.*', '', module)
 

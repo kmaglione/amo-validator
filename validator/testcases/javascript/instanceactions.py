@@ -10,8 +10,6 @@ node
     the current node being evaluated
 """
 
-import actions
-
 
 def addEventListener(args, traverser, node, wrapper):
     """
@@ -42,12 +40,12 @@ def createElement(args, traverser, node, wrapper):
     if not args:
         return
 
-    simple_args = map(traverser._traverse_node, args)
+    args = map(traverser._traverse_node, args)
 
-    first_as_str = actions._get_as_str(simple_args[0].get_literal_value())
-    if first_as_str.lower() == u'script':
+    name = args[0]
+    if name.as_str().lower() == u'script':
         _create_script_tag(traverser)
-    elif not simple_args[0].is_literal():
+    elif not name.is_literal():
         _create_variable_element(traverser)
 
 
@@ -57,12 +55,12 @@ def createElementNS(args, traverser, node, wrapper):
     if not args or len(args) < 2:
         return
 
-    simple_args = map(traverser._traverse_node, args)
+    args = map(traverser._traverse_node, args)
 
-    second_as_str = actions._get_as_str(simple_args[1].get_literal_value())
-    if 'script' in second_as_str.lower():
+    name = args[1]
+    if 'script' in name.as_str().lower():
         _create_script_tag(traverser)
-    elif not simple_args[1].is_literal():
+    elif not name.is_literal():
         _create_variable_element(traverser)
 
 
@@ -117,7 +115,7 @@ def _create_script_tag(traverser):
 
 def _create_variable_element(traverser):
     """Raises a warning that the dev is creating an arbitrary element"""
-    traverser.err.warning(
+    traverser.warning(
         err_id=('testcases_javascript_instanceactions', '_call_expression',
                 'createelement_variable'),
         warning='Variable element type being created',
@@ -126,11 +124,7 @@ def _create_variable_element(traverser):
                      'should be used when taking advantage of the element '
                      'creation functions.',
                      "E.g.: createElement('foo') rather than "
-                     'createElement(el_type)'),
-        filename=traverser.filename,
-        line=traverser.line,
-        column=traverser.position,
-        context=traverser.context)
+                     'createElement(el_type)'))
 
 
 def setAttribute(args, traverser, node, wrapper):
@@ -139,10 +133,10 @@ def setAttribute(args, traverser, node, wrapper):
     if not args:
         return
 
-    simple_args = [traverser._traverse_node(a) for a in args]
+    args = map(traverser._traverse_node, args)
 
-    first_as_str = actions._get_as_str(simple_args[0].get_literal_value())
-    if first_as_str.lower().startswith('on'):
+    name = args[0]
+    if name.as_str().lower().startswith('on'):
         traverser.warning(
             err_id=('testcases_javascript_instanceactions', 'setAttribute',
                     'setting_on*'),

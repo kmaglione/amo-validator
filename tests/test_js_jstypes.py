@@ -1,53 +1,41 @@
 from nose.tools import eq_
 
-import validator.testcases.javascript.jstypes as jstypes
-from js_helper import _do_test_raw
+from .js_helper import _do_test_raw
+
+from validator.errorbundler import ErrorBundle
+from validator.testcases.javascript import jstypes, traverser
+
+
+traverser = traverser.Traverser(ErrorBundle(), 'stdin')
 
 
 def test_jsarray_output():
     """Test that the output function for JSArray doesn't bork."""
 
-    ja = jstypes.JSArray()
+    ja = jstypes.JSArray(traverser=traverser)
     ja.elements = [None, None]
-    ja.output()  # Used to throw tracebacks.
+    repr(ja)  # Used to throw tracebacks.
     ja.get_literal_value()  # Also used to throw tracebacks.
 
 
 def test_jsobject_output():
     """Test that the output function for JSObject doesn't bork."""
 
-    jso = jstypes.JSObject()
+    jso = jstypes.JSObject(traverser=traverser)
     jso.data = {'first': None}
-    jso.output()  # Used to throw tracebacks
+    repr(jso)  # Used to throw tracebacks
 
 
 def test_jsobject_recursion():
     """Test that circular references don't cause recursion errors."""
 
-    jso = jstypes.JSObject()
-    jso2 = jstypes.JSObject()
+    jso = traverser.wrap(jstypes.JSObject())
+    jso2 = traverser.wrap(jstypes.JSObject())
 
-    jso.data = {'first': jstypes.JSWrapper(jso2)}
-    jso2.data = {'second': jstypes.JSWrapper(jso)}
+    jso.value.data = {'first': jso2}
+    jso2.value.data = {'second': jso}
 
-    print jso.output()
-    assert '(recursion)' in jso.output()
-
-
-def test_jsarray_recursion():
-    """Test that circular references don't cause recursion errors."""
-
-    ja = jstypes.JSArray()
-    ja2 = jstypes.JSArray()
-
-    ja.elements = [jstypes.JSWrapper(ja2)]
-    ja2.elements = [jstypes.JSWrapper(ja)]
-
-    print ja.output()
-    assert '(recursion)' in ja.output()
-
-    print ja.get_literal_value()
-    assert '(recursion)' in ja.get_literal_value()
+    assert '<recursive-reference>' in repr(jso.value)
 
 
 def test_jsliteral_regex():
@@ -108,8 +96,8 @@ def test_jsobject_computed_properties():
 def test_jsobject_get_wrap():
     """Test that JSObject always returns a JSWrapper."""
 
-    x = jstypes.JSObject()
-    x.data['foo'] = jstypes.JSLiteral('bar')
+    x = traverser.wrap(jstypes.JSObject()).value
+    x.data['foo'] = traverser.wrap('bar').value
 
     out = x.get('foo')
     assert isinstance(out, jstypes.JSWrapper)
@@ -119,8 +107,8 @@ def test_jsobject_get_wrap():
 def test_jsarray_get_wrap():
     """Test that JSArray always returns a JSWrapper."""
 
-    x = jstypes.JSArray()
-    x.elements = [None, jstypes.JSLiteral('bar')]
+    x = traverser.wrap(jstypes.JSArray()).value
+    x.elements = [None, traverser.wrap('bar').value]
 
     out = x.get('1')
     assert isinstance(out, jstypes.JSWrapper)

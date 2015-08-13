@@ -20,6 +20,7 @@ def test_prepare_package(test_package):
 
 
 @mock.patch('validator.submain.test_package')
+@mock.patch('validator.constants.IN_TESTS', False)
 def test_validation_timeout(test_package):
     def slow(*args, **kw):
         time.sleep(1)
@@ -38,6 +39,7 @@ def test_validation_timeout(test_package):
 
 @mock.patch('validator.submain.test_package')
 @mock.patch('validator.errorbundler.log')
+@mock.patch('validator.constants.IN_TESTS', False)
 def test_validation_error(log, test_package):
     """Test that an unexpected exception during validation is turned into
     an error message and logged."""

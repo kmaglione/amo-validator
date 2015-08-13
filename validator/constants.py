@@ -8,6 +8,9 @@ import types
 
 DESCRIPTION_TYPES = types.StringTypes + (list, tuple, )
 
+# Are we currently running tests?
+IN_TESTS = False
+
 # Package type constants.
 PACKAGE_ANY = 0
 PACKAGE_EXTENSION = 1

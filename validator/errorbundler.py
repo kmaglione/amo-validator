@@ -5,7 +5,7 @@ import uuid
 from StringIO import StringIO
 
 import validator
-from validator import unicodehelper
+from validator import constants, unicodehelper
 from validator.constants import SIGNING_SEVERITIES
 from validator.outputhandlers.shellcolors import OutputHandler
 
@@ -243,16 +243,20 @@ class ErrorBundle(object):
         If the error is a validation timeout, it is re-raised unless
         `msg_id` is "validation_timeout"."""
 
-        if exc_info:
-            if (isinstance(exc_info[1], validator.ValidationTimeout) and
-                    msg_id != 'validation_timeout'):
-                # These should always propagate to the top-level exception
-                # handler, and be reported only once.
-                raise exc_info[1]
+        if constants.IN_TESTS:
+            # Exceptions that happen during tests should generally end the
+            # test prematurely rather than just generating a message.
+            raise exc_info[0], exc_info[1], exc_info[2]
 
-            log.error('Unexpected error during validation: %s: %s'
-                      % (exc_info[0].__name__, exc_info[1]),
-                      exc_info=exc_info)
+        if (isinstance(exc_info[1], validator.ValidationTimeout) and
+                msg_id != 'validation_timeout'):
+            # These should always propagate to the top-level exception
+            # handler, and be reported only once.
+            raise exc_info[0], exc_info[1], exc_info[2]
+
+        log.error('Unexpected error during validation: %s: %s'
+                  % (exc_info[0].__name__, exc_info[1]),
+                  exc_info=exc_info)
 
         full_id = ('validator', 'unexpected_exception')
         if msg_id:

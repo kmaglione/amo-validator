@@ -2,8 +2,11 @@ from nose.tools import eq_
 
 from .js_helper import TestCase, _do_test_raw
 
-from validator.testcases.javascript.jstypes import JSWrapper
-from validator.testcases.javascript.actions import _get_as_num
+from validator.errorbundler import ErrorBundle
+from validator.testcases.javascript import traverser
+
+
+traverser = traverser.Traverser(ErrorBundle(), 'stdin')
 
 
 def test_array_destructuring():
@@ -27,7 +30,7 @@ def test_get_as_num():
     """Test that _get_as_num performs as expected."""
 
     def test(input, output):
-        eq_(_get_as_num(input), output)
+        eq_(traverser.wrap(input).as_float(), output)
 
     yield test, 1, 1
     yield test, 1.0, 1.0
@@ -37,9 +40,6 @@ def test_get_as_num():
     yield test, '0xF', 15
     yield test, True, 1
     yield test, False, 0
-
-    yield test, JSWrapper(3), 3
-    yield test, JSWrapper(None), 0
 
 
 def test_spidermonkey_warning():

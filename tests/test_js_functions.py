@@ -1,3 +1,5 @@
+from math import isnan
+
 from nose.tools import eq_
 
 from js_helper import _do_test_raw, _get_var
@@ -161,8 +163,9 @@ def test_number_global_conversions():
     eq_(_get_var(err, 'c'), 123.123)
     eq_(_get_var(err, 'd'), 123)
     eq_(_get_var(err, 'e'), 123.456)
-    eq_(_get_var(err, 'f'), _get_var(err, 'nan'))
-    eq_(_get_var(err, 'g'), _get_var(err, 'nan'))
+    assert isnan(_get_var(err, 'f'))
+    eq_(_get_var(err, 'g'), 0)
+    assert isnan(_get_var(err, 'nan'))
 
 
 def test_unsafe_template_methods():

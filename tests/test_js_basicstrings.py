@@ -29,16 +29,15 @@ def test_augconcat():
     x += "bar";
     """)
     assert not err.message_count
-    print _get_var(err, 'x')
-    assert _get_var(err, 'x') == 'foobar'
+    eq_(_get_var(err, 'x'), 'foobar')
 
     err = _do_test_raw("""
     var x = {"xyz":"foo"};
     x["xyz"] += "bar";
     """)
     assert not err.message_count
-    xyz_val = err.final_context.data['x'].get(None, 'xyz').get_literal_value()
-    print xyz_val
+
+    xyz_val = err.final_context.data['x'].get('xyz').get_literal_value()
     assert xyz_val == 'foobar'
 
 

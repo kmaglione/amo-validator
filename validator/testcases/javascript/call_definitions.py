@@ -2,8 +2,7 @@ import math
 import re
 
 import actions
-import predefinedentities
-from jstypes import JSArray, JSWrapper
+from .jstypes import JSArray
 
 # Function prototypes should implement the following:
 #  wrapper : The JSWrapper instace that is being called
@@ -26,15 +25,15 @@ def xpcom_constructor(method, extend=False, mutate=False, pretraversed=False):
             arguments = [traverser._traverse_node(x) for x in arguments]
         argz = arguments[0]
 
-        if not argz.is_global or 'xpcom_map' not in argz.value:
-            argz = JSWrapper(traverser=traverser)
-            argz.value = {'xpcom_map': lambda: {'value': {}}}
+        if 'xpcom_map' not in argz.hooks:
+            argz = traverser.wrap()
+            argz.hooks = {'xpcom_map': lambda: {'value': {}}}
 
         traverser._debug('(Building XPCOM...)')
 
         inst = traverser._build_global(
-            method, argz.value['xpcom_map']())
-        inst.value['overwritable'] = True
+            method, argz.hooks['xpcom_map']())
+        inst.hooks['overwritable'] = True
 
         if extend or mutate:
             # FIXME: There should be a way to get this without
@@ -42,31 +41,24 @@ def xpcom_constructor(method, extend=False, mutate=False, pretraversed=False):
             parent = actions.trace_member(traverser,
                                           wrapper['callee']['object'])
 
-            if mutate and not (parent.is_global and
-                               isinstance(parent.value, dict) and
-                               'value' in parent.value):
+            if mutate and 'value' not in parent.hooks:
                 # Assume that the parent object is a first class
-                # wrapped native
-                parent.value = inst.value
+                # wrapped native, and just copy our hooks to it.
+                parent.hooks = inst.hooks
 
-                # FIXME: Only objects marked as global are processed
-                # as XPCOM instances
-                parent.is_global = True
+            if extend and mutate:
+                if callable(parent.hooks['value']):
+                    parent.hooks['value'] = \
+                        parent.hooks['value'](t=traverser)
 
-            if isinstance(parent.value, dict):
-                if extend and mutate:
-                    if callable(parent.value['value']):
-                        parent.value['value'] = \
-                            parent.value['value'](t=traverser)
+                parent.hooks['value'].update(inst.hooks['value'])
+                return parent
 
-                    parent.value['value'].update(inst.value['value'])
-                    return parent
+            if extend:
+                inst.hooks['value'].update(parent.hooks['value'])
 
-                if extend:
-                    inst.value['value'].update(parent.value['value'])
-
-                if mutate:
-                    parent.value = inst.value
+            if mutate:
+                parent.hooks = inst.hooks
 
         return inst
     definition.__name__ = 'xpcom_%s' % str(method)
@@ -76,37 +68,31 @@ def xpcom_constructor(method, extend=False, mutate=False, pretraversed=False):
 # Global object function definitions:
 def string_global(wrapper, arguments, traverser):
     if not arguments:
-        return JSWrapper('', traverser=traverser)
+        return traverser.wrap('')
+
     arg = traverser._traverse_node(arguments[0])
-    value = actions._get_as_str(arg.get_literal_value())
-    return JSWrapper(value, traverser=traverser)
+    return traverser.wrap(arg.as_str(), dirty=arg.dirty)
 
 
 def array_global(wrapper, arguments, traverser):
     output = JSArray()
     if arguments:
         output.elements = [traverser._traverse_node(a) for a in arguments]
-    return JSWrapper(output, traverser=traverser)
+    return traverser.wrap(output)
 
 
 def number_global(wrapper, arguments, traverser):
     if not arguments:
-        return JSWrapper(0, traverser=traverser)
+        return traverser.wrap(0)
     arg = traverser._traverse_node(arguments[0])
-    try:
-        value = float(arg.get_literal_value())
-    except (ValueError, TypeError):
-        return traverser._build_global(
-                name='NaN',
-                entity=predefinedentities.GLOBAL_ENTITIES[u'NaN'])
-    return JSWrapper(value, traverser=traverser)
+    return traverser.wrap(arg.as_float())
 
 
 def boolean_global(wrapper, arguments, traverser):
     if not arguments:
-        return JSWrapper(False, traverser=traverser)
+        return traverser.wrap(False)
     arg = traverser._traverse_node(arguments[0])
-    return JSWrapper(bool(arg.get_literal_value()), traverser=traverser)
+    return traverser.wrap(arg.as_bool())
 
 
 def python_wrap(func, args, nargs=False):
@@ -124,10 +110,10 @@ def python_wrap(func, args, nargs=False):
 
     def _process_literal(type_, literal):
         if type_ == 'string':
-            return actions._get_as_str(literal)
+            return literal.as_str()
         elif type_ == 'num':
-            return actions._get_as_num(literal)
-        return literal
+            return literal.as_float()
+        return literal.as_primitive()
 
     def wrap(wrapper, arguments, traverser):
         passed_args = [traverser._traverse_node(a) for a in arguments]
@@ -140,16 +126,14 @@ def python_wrap(func, args, nargs=False):
                     parg = passed_args[0]
                     passed_args = passed_args[1:]
 
-                    passed_literal = parg.get_literal_value()
-                    passed_literal = _process_literal(type_, passed_literal)
+                    passed_literal = _process_literal(type_, parg)
                     params.append(passed_literal)
                 else:
                     params.append(def_value)
         else:
             # Handle dynamic argument lists.
             for arg in passed_args:
-                literal = arg.get_literal_value()
-                params.append(_process_literal(args[0], literal))
+                params.append(_process_literal(args[0], arg))
 
         traverser._debug('Calling wrapped Python function with: (%s)' %
                          ', '.join(map(str, params)))
@@ -159,7 +143,7 @@ def python_wrap(func, args, nargs=False):
             # If we cannot compute output, just return nothing.
             output = None
 
-        return JSWrapper(output, traverser=traverser)
+        return traverser.wrap(output)
 
     return wrap
 
@@ -168,31 +152,30 @@ def math_log(wrapper, arguments, traverser):
     """Return a better value than the standard python log function."""
     args = [traverser._traverse_node(a) for a in arguments]
     if not args:
-        return JSWrapper(0, traverser=traverser)
+        return traverser.wrap(0)
 
-    arg = actions._get_as_num(args[0].get_literal_value())
+    arg = args[0].as_float()
     if arg == 0:
-        return JSWrapper(float('-inf'), traverser=traverser)
+        return traverser.wrap(float('-inf'))
 
     if arg < 0:
-        return JSWrapper(traverser=traverser)
+        return traverser.wrap(None)
 
-    arg = math.log(arg)
-    return JSWrapper(arg, traverser=traverser)
+    return traverser.wrap(math.log(arg))
 
 
 def math_random(wrapper, arguments, traverser):
     """Return a "random" value for Math.random()."""
-    return JSWrapper(0.5, traverser=traverser)
+    return traverser.wrap(0.5)
 
 
 def math_round(wrapper, arguments, traverser):
     """Return a better value than the standard python round function."""
     args = [traverser._traverse_node(a) for a in arguments]
     if not args:
-        return JSWrapper(0, traverser=traverser)
+        return traverser.wrap(0)
 
-    arg = actions._get_as_num(args[0].get_literal_value())
+    arg = args[0].as_float()
     # Prevent nasty infinity tracebacks.
     if abs(arg) == float('inf'):
         return args[0]
@@ -201,7 +184,7 @@ def math_round(wrapper, arguments, traverser):
     if arg < 0 and int(arg) != arg:
         arg += 0.0000000000000001
     arg = round(arg)
-    return JSWrapper(arg, traverser=traverser)
+    return traverser.wrap(arg)
 
 
 def open_in_chrome_context(uri, method, traverser):

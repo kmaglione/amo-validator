@@ -1,4 +1,7 @@
+from math import isnan
+
 from nose.tools import eq_
+
 from js_helper import _do_real_test_raw, _do_test_raw, _do_test_scope, _get_var
 
 
@@ -44,10 +47,10 @@ def test_basic_math():
     assert _get_var(err, 'y') == 2
     assert _get_var(err, 'z') == 3
 
-    assert _get_var(err, 'dbz') == 0  # Spidermonkey does this.
-    assert _get_var(err, 'dbz1') == 0  # ...and this.
-    assert _get_var(err, 'dbz2') == 0
-    assert _get_var(err, 'dbz3') == 0
+    assert _get_var(err, 'dbz') == float('inf')  # Spidermonkey does this.
+    assert isnan(_get_var(err, 'dbz1'))  # ...and this.
+    assert _get_var(err, 'dbz2') == float('inf')
+    assert isnan(_get_var(err, 'dbz3'))
 
     assert _get_var(err, 'a') == 5
     assert _get_var(err, 'b') == 4

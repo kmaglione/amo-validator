@@ -12,7 +12,6 @@ from .instanceactions import INSTANCE_DEFINITIONS
 from .instanceproperties import OBJECT_DEFINITIONS
 from .jstypes import JSObject, JSWrapper
 from .predefinedentities import hook_global
-from . import actions
 
 
 hook_global(
@@ -261,10 +260,7 @@ def js_unwrap(wrapper, arguments, traverser):
     # FIXME(kris): We should be returning a new (cached) object here, not
     # altering the original. Wrapping and unwrapping does not alter the
     # original object.
-    if obj.is_global:
-        obj.value['is_unwrapped'] = True
-    else:
-        obj.value.is_unwrapped = True
+    obj.value.is_unwrapped = True
 
     return obj
 
@@ -301,10 +297,7 @@ def js_wrap(wrapper, arguments, traverser):
     # FIXME(kris): We should be returning a new (cached) object here, not
     # altering the original. Wrapping and unwrapping does not alter the
     # original object.
-    if obj.is_global:
-        obj.value['is_unwrapped'] = False
-    else:
-        obj.value.is_unwrapped = False
+    obj.value.is_unwrapped = False
 
     return obj
 
@@ -368,7 +361,7 @@ def set_contentScript(value, traverser):
     which are essentially the same as calling `eval`."""
 
     if value.is_literal():
-        content_script = actions._get_as_str(value)
+        content_script = value.as_str()
 
         test_js_file(traverser.err, traverser.filename, content_script,
                      line=traverser.line, context=traverser.context)

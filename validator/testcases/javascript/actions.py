@@ -9,30 +9,16 @@ from validator.constants import (BUGZILLA_BUG, DESCRIPTION_TYPES, FENNEC_GUID,
                                  FIREFOX_GUID, MAX_STR_SIZE)
 from validator.decorator import version_range
 from validator.testcases.regex import validate_string
-from jstypes import JSArray, JSContext, JSLiteral, JSObject, JSWrapper
+from jstypes import JSArray, JSContext, JSObject, JSWrapper, Undefined
 
 
 NUMERIC_TYPES = (int, long, float, complex)
 
 # None of these operations (or their augmented assignment counterparts) should
 # be performed on non-numeric data. Any time we get non-numeric data for these
-# guys, we just return window.NaN.
+# guys, we just return NaN.
 NUMERIC_OPERATORS = ('-', '*', '/', '%', '<<', '>>', '>>>', '|', '^', '&')
 NUMERIC_OPERATORS += tuple('%s=' % op for op in NUMERIC_OPERATORS)
-
-
-def get_NaN(traverser):
-    # If we've cached the traverser's NaN instance, just use that.
-    ncache = getattr(traverser, 'NAN_CACHE', None)
-    if ncache is not None:
-        return ncache
-
-    # Otherwise, we need to import GLOBAL_ENTITIES and build a raw copy.
-    from predefinedentities import GLOBAL_ENTITIES
-    ncache = traverser._build_global('NaN', GLOBAL_ENTITIES[u'NaN'])
-    # Cache it so we don't need to do this again.
-    traverser.NAN_CACHE = ncache
-    return ncache
 
 
 def _get_member_exp_property(traverser, node):
@@ -42,28 +28,23 @@ def _get_member_exp_property(traverser, node):
         return unicode(node['property']['name'])
     else:
         eval_exp = traverser._traverse_node(node['property'])
-        return _get_as_str(eval_exp.get_literal_value())
+        return eval_exp.as_str()
 
 
 def _expand_globals(traverser, node):
     """Expands a global object that has a lambda value."""
 
-    if node.is_global and callable(node.value.get('value')):
-        result = node.value['value'](traverser)
+    if callable(node.hooks.get('value')):
+        result = node.hooks['value'](traverser)
+
         if isinstance(result, dict):
             output = traverser._build_global('--', result)
         elif isinstance(result, JSWrapper):
             output = result
         else:
-            output = JSWrapper(result, traverser)
+            output = traverser.wrap(result)
 
-        # Set the node context.
-        if 'context' in node.value:
-            traverser._debug('CONTEXT>>%s' % node.value['context'])
-            output.context = node.value['context']
-        else:
-            traverser._debug('CONTEXT>>INHERITED')
-            output.context = node.context
+        output.hooks.setdefault('value', {})
 
         return output
 
@@ -82,32 +63,28 @@ def trace_member(traverser, node, instantiate=False):
 
         identifier = _get_member_exp_property(traverser, node)
 
-        # Handle the various global entity properties.
-        if base.is_global:
-            # If we've got an XPCOM wildcard, return a copy of the entity.
-            if 'xpcom_wildcard' in base.value:
-                traverser._debug('MEMBER_EXP>>XPCOM_WILDCARD')
+        # If we've got an XPCOM wildcard, return a copy of the entity.
+        if 'xpcom_wildcard' in base.hooks:
+            traverser._debug('MEMBER_EXP>>XPCOM_WILDCARD')
 
-                from predefinedentities import CONTRACT_ENTITIES
-                if identifier in CONTRACT_ENTITIES:
-                    kw = dict(err_id=('js', 'actions', 'dangerous_contract'),
-                              warning='Dangerous XPCOM contract ID')
-                    kw.update(CONTRACT_ENTITIES[identifier])
+            from predefinedentities import CONTRACT_ENTITIES
+            if identifier in CONTRACT_ENTITIES:
+                kw = dict(err_id=('js', 'actions', 'dangerous_contract'),
+                          warning='Dangerous XPCOM contract ID')
+                kw.update(CONTRACT_ENTITIES[identifier])
 
-                    traverser.warning(**kw)
+                traverser.warning(**kw)
 
-                base.value = base.value.copy()
-                del base.value['xpcom_wildcard']
-                return base
+            base.hooks = base.hooks.copy()
+            del base.hooks['xpcom_wildcard']
+            return base
 
         test_identifier(traverser, identifier)
 
         traverser._debug('MEMBER_EXP>>PROPERTY: %s' % identifier)
-        output = base.get(
-            traverser=traverser, instantiate=instantiate, name=identifier)
-        output.context = base.context
+        output = base.get(instantiate=instantiate, name=identifier)
 
-        if base.is_global:
+        if base.hooks:
             # In the cases of XPCOM objects, methods generally
             # remain bound to their parent objects, even when called
             # indirectly.
@@ -121,7 +98,7 @@ def trace_member(traverser, node, instantiate=False):
         # If we're supposed to instantiate the object and it doesn't already
         # exist, instantitate the object.
         if instantiate and not traverser._is_defined(node['name']):
-            output = JSWrapper(JSObject(), traverser=traverser)
+            output = traverser.wrap(JSObject())
             traverser.contexts[0].set(node['name'], output)
         else:
             output = traverser._seek_variable(node['name'])
@@ -150,9 +127,10 @@ def test_identifier(traverser, name):
 
 def _function(traverser, node):
     'Prevents code duplication'
+    # Oh? How is that, exactly?
 
     def wrap(traverser, node):
-        me = JSObject()
+        me = JSObject(traverser=traverser)
 
         traverser.function_collection.append([])
 
@@ -177,7 +155,7 @@ def _function(traverser, node):
 
         local_context = traverser._peek_context(1)
         for param in params:
-            var = JSWrapper(lazy=True, traverser=traverser)
+            var = traverser.wrap(lazy=True)
 
             # We can assume that the params are static because we don't care
             # about what calls the function. We want to know whether the
@@ -201,7 +179,7 @@ def _function(traverser, node):
     # Put the function off for traversal at the end of the current block scope.
     traverser.function_collection[-1].append(partial(wrap, traverser, node))
 
-    return JSWrapper(traverser=traverser, callable=True, dirty=True)
+    return traverser.wrap(callable=True, dirty=True)
 
 
 def _define_function(traverser, node):
@@ -266,8 +244,8 @@ def _define_var(traverser, node):
                 for value in declaration['init']['elements']:
                     if vars[0]:
                         traverser._declare_variable(
-                            vars[0], JSWrapper(traverser._traverse_node(value),
-                                               traverser=traverser))
+                            vars[0],
+                            traverser.wrap(traverser._traverse_node(value)))
                     vars = vars[1:]  # Pop off the first value
 
             # It's being assigned by a JSArray (presumably)
@@ -295,10 +273,10 @@ def _define_var(traverser, node):
 
                     if prop['value']['type'] == 'Identifier':
                         traverser._declare_variable(
-                            prop['value']['name'],
-                            init_obj.get(traverser, prop_name))
+                            prop['value']['name'], init_obj.get(prop_name))
+
                     elif prop['value']['type'] == 'ObjectPattern':
-                        _proc_objpattern(init_obj.get(traverser, prop_name),
+                        _proc_objpattern(init_obj.get(prop_name),
                                          prop['value']['properties'])
 
             if init is not None:
@@ -310,14 +288,10 @@ def _define_var(traverser, node):
             traverser._debug('NAME>>%s' % var_name)
 
             var_value = traverser._traverse_node(declaration['init'])
-            traverser._debug('VALUE>>%s' % (var_value.output()
-                                            if var_value is not None
-                                            else 'None'))
+            traverser._debug('VALUE>>%r' % var_value)
 
             if not isinstance(var_value, JSWrapper):
-                var = JSWrapper(value=var_value,
-                                const=kind == 'const',
-                                traverser=traverser)
+                var = traverser.wrap(var_value, const=kind == 'const')
             else:
                 var = var_value
                 var.const = kind == 'const'
@@ -336,7 +310,9 @@ def _define_var(traverser, node):
 def _define_obj(traverser, node):
     'Creates a local context object'
 
-    var = JSObject()
+    obj = JSObject()
+    wrapper = traverser.wrap(obj, lazy=True)
+
     for prop in node['properties']:
         if prop['type'] == 'PrototypeMutation':
             var_name = 'prototype'
@@ -354,31 +330,26 @@ def _define_obj(traverser, node):
                 var_name = _get_member_exp_property(traverser, name)
 
         var_value = traverser._traverse_node(prop['value'])
-        var.set(var_name, var_value, traverser)
+        obj.set(var_name, var_value)
 
         # TODO: Observe "kind"
-
-    if not isinstance(var, JSWrapper):
-        return JSWrapper(var, lazy=True, traverser=traverser)
-    var.lazy = True
-    return var
+    return wrapper
 
 
 def _define_array(traverser, node):
     """Instantiate an array object from the parse tree."""
-    arr = JSArray()
-    arr.elements = map(traverser._traverse_node, node['elements'])
-    return arr
+    return JSArray(map(traverser._traverse_node, node['elements']),
+                   traverser=traverser)
 
 
 def _define_template_strings(traverser, node):
     """Instantiate an array of raw and cooked template strings."""
-    cooked = JSArray()
-    cooked.elements = map(traverser._traverse_node, node['cooked'])
-    raw = JSArray()
-    raw.elements = map(traverser._traverse_node, node['raw'])
+    cooked = JSArray(map(traverser._traverse_node, node['cooked']),
+                     traverser=traverser)
 
-    cooked.set('raw', raw, traverser)
+    cooked['raw'] = JSArray(map(traverser._traverse_node, node['raw']),
+                            traverser=traverser)
+
     return cooked
 
 
@@ -396,10 +367,9 @@ def _define_literal(traverser, node):
     """
     value = node['value']
     if isinstance(value, dict):
-        return JSWrapper(JSObject(), traverser=traverser, dirty=True)
+        return traverser.wrap(JSObject(), dirty=True)
 
-    wrapper = JSWrapper(value if value is not None else JSLiteral(None),
-                        traverser=traverser)
+    wrapper = traverser.wrap(value)
     test_literal(traverser, wrapper)
     return wrapper
 
@@ -438,21 +408,21 @@ def _call_expression(traverser, node):
             column=traverser.position,
             context=traverser.context)
 
-    if member.is_global and callable(member.value.get('dangerous', None)):
-        result = member.value['dangerous'](a=args, t=traverser._traverse_node,
+    if callable(member.hooks.get('dangerous', None)):
+        result = member.hooks['dangerous'](a=args, t=traverser._traverse_node,
                                            e=traverser.err)
-        name = member.value.get('name', '')
+        name = member.hooks.get('name', '')
 
         if result and name:
             kwargs = {
                 'err_id': ('testcases_javascript_actions', '_call_expression',
                            'called_dangerous_global'),
                 'warning': '`%s` called in potentially dangerous manner' %
-                           member.value['name'],
+                           member.hooks['name'],
                 'description':
                     'The global `%s` function was called using a set '
                     'of dangerous parameters. Calls of this nature '
-                    'are deprecated.' % member.value['name']}
+                    'are deprecated.' % member.hooks['name']}
 
             if isinstance(result, DESCRIPTION_TYPES):
                 kwargs['description'] = result
@@ -473,13 +443,14 @@ def _call_expression(traverser, node):
                         args, traverser, node, wrapper=member)
             return result
 
-    if member.is_global and 'return' in member.value:
+    if 'return' in member.hooks:
         if 'object' in node['callee']:
             member.parent = trace_member(traverser, node['callee']['object'])
 
-        return member.value['return'](wrapper=member, arguments=args,
+        return member.hooks['return'](wrapper=member, arguments=args,
                                       traverser=traverser)
-    return JSWrapper(JSObject(), dirty=True, traverser=traverser)
+
+    return traverser.wrap(JSObject(), dirty=True)
 
 
 def _readonly_top(traverser, right, node_right):
@@ -519,9 +490,6 @@ def _get_this(traverser, node):
 def _new(traverser, node):
     'Returns a new copy of a node.'
 
-    # We don't actually process the arguments as part of the flow because of
-    # the Angry T-Rex effect. For now, we just traverse them to ensure they
-    # don't contain anything dangerous.
     args = node['arguments']
     if isinstance(args, list):
         for arg in args:
@@ -531,11 +499,12 @@ def _new(traverser, node):
 
     elem = traverser._traverse_node(node['callee'])
     if not isinstance(elem, JSWrapper):
-        elem = JSWrapper(elem, traverser=traverser)
-    if elem.is_global:
+        elem = traverser.wrap(elem)
+
+    if elem.hooks:
         traverser._debug('Making overwritable')
-        elem.value = deepcopy(elem.value)
-        elem.value['overwritable'] = True
+        elem.hooks = deepcopy(elem.hooks)
+        elem.hooks['overwritable'] = True
     return elem
 
 
@@ -550,7 +519,7 @@ def _ident(traverser, node):
     if traverser._is_defined(name):
         return traverser._seek_variable(name)
 
-    return JSWrapper(JSObject(), traverser=traverser, dirty=True)
+    return traverser.wrap(JSObject(), dirty=True)
 
 
 def _expr_assignment(traverser, node):
@@ -560,8 +529,7 @@ def _expr_assignment(traverser, node):
     traverser.debug_level += 1
 
     traverser._debug('ASSIGNMENT>>PARSING RIGHT')
-    right = traverser._traverse_node(node['right'])
-    right = JSWrapper(right, traverser=traverser)
+    right = traverser.wrap(traverser._traverse_node(node['right']))
 
     # Treat direct assignment different than augmented assignment.
     if node['operator'] == '=':
@@ -578,7 +546,7 @@ def _expr_assignment(traverser, node):
             # Raise a global overwrite issue if the identifier is global.
             global_overwrite = traverser._is_global(node_left['name'])
 
-            # Get the readonly attribute and store its value if is_global
+            # Get the readonly attribute and store its value if is global.
             if global_overwrite:
                 global_dict = GLOBAL_ENTITIES[node_left['name']]
                 if 'readonly' in global_dict:
@@ -586,38 +554,30 @@ def _expr_assignment(traverser, node):
 
             traverser._declare_variable(node_left['name'], right, type_='glob')
         elif node_left['type'] == 'MemberExpression':
-            member_object = trace_member(traverser, node_left['object'],
-                                         instantiate=True)
-            global_overwrite = (member_object.is_global and
-                                not ('overwritable' in member_object.value and
-                                     member_object.value['overwritable']))
+            member_obj = trace_member(traverser, node_left['object'],
+                                      instantiate=True)
+
+            global_overwrite = (member_obj.hooks and
+                                not member_obj.hooks.get('overwritable'))
+
             member_property = _get_member_exp_property(traverser, node_left)
             traverser._debug('ASSIGNMENT:MEMBER_PROPERTY(%s)'
                              % member_property)
             traverser._debug('ASSIGNMENT:GLOB_OV::%s' % global_overwrite)
 
-            # Don't do the assignment if we're facing a global.
-            if not member_object.is_global:
-                if member_object.value is None:
-                    member_object.value = JSObject()
+            if isinstance(member_obj.value, JSObject):
+                member_obj.value.set(member_property, right)
 
-                if not member_object.is_global:
-                    member_object.value.set(member_property, right, traverser)
-                else:
-                    # It's probably better to do nothing.
-                    pass
+            if 'value' in member_obj.hooks:
+                hooks = _expand_globals(traverser, member_obj).hooks
 
-            elif 'value' in member_object.value:
-                member_object_value = _expand_globals(traverser,
-                                                      member_object).value
-                if member_property in member_object_value['value']:
-
-                    # If it's a global and the actual member exists, test
-                    # whether it can be safely overwritten.
-                    member = member_object_value['value'][member_property]
-                    if 'readonly' in member:
+                value_hook = hooks['value'].get(member_property)
+                if value_hook:
+                    # If we have hooks for this property, test whether it can
+                    # be safely overwritten.
+                    if 'readonly' in value_hook:
                         global_overwrite = True
-                        readonly_value = member['readonly']
+                        readonly_value = value_hook['readonly']
 
         traverser._debug('ASSIGNMENT:DIRECT:GLOB_OVERWRITE %s' %
                          global_overwrite)
@@ -666,38 +626,39 @@ def _expr_assignment(traverser, node):
         if lit_right is None:
             lit_right = 0
 
-        # Give them default values so we have them in scope.
-        gleft, gright = 0, 0
-
         # All of the assignment operators
-        operators = {'=': lambda: right,
-                     '+=': lambda: lit_left + lit_right,
-                     '-=': lambda: gleft - gright,
-                     '*=': lambda: gleft * gright,
-                     '/=': lambda: 0 if gright == 0 else (gleft / gright),
-                     '%=': lambda: 0 if gright == 0 else (gleft % gright),
-                     '<<=': lambda: int(gleft) << int(gright),
-                     '>>=': lambda: int(gleft) >> int(gright),
-                     '>>>=': lambda: float(abs(int(gleft)) >> gright),
-                     '|=': lambda: int(gleft) | int(gright),
-                     '^=': lambda: int(gleft) ^ int(gright),
-                     '&=': lambda: int(gleft) & int(gright)}
+        operators = {
+            '=': lambda: right,
+            '+=': lambda: lit_left + lit_right,
+            '-=': lambda: gleft - gright,
+            '*=': lambda: gleft * gright,
+            '/=': lambda: float('inf') if gright == 0 else gleft / gright,
+            '%=': lambda: float('nan') if gright == 0 else gleft % gright,
+            '<<=': lambda: left.as_int() << right.as_int(),
+            '>>=': lambda: left.as_int() >> right.as_int(),
+            # This is wrong.
+            '>>>=': lambda: abs(left.as_int()) >> right.as_int(),
+            '|=': lambda: left.as_int() | right.as_int(),
+            '^=': lambda: left.as_int() ^ right.as_int(),
+            '&=': lambda: left.as_int() & right.as_int(),
+        }
 
         # If we're modifying a non-numeric type with a numeric operator, return
         # NaN.
         if (not isinstance(lit_left, NUMERIC_TYPES) and
                 token in NUMERIC_OPERATORS):
-            left.set_value(get_NaN(traverser), traverser=traverser)
+            left.set_value(float('nan'))
             return left
 
         # If either side of the assignment operator is a string, both sides
         # need to be casted to strings first.
         if (isinstance(lit_left, types.StringTypes) or
                 isinstance(lit_right, types.StringTypes)):
-            lit_left = _get_as_str(lit_left)
-            lit_right = _get_as_str(lit_right)
+            lit_left = left.as_str()
+            lit_right = right.as_str()
 
-        gleft, gright = _get_as_num(left), _get_as_num(right)
+        gleft = left.as_float()
+        gright = right.as_float()
 
         traverser._debug('ASSIGNMENT>>OPERATION:%s' % token)
         if token not in operators:
@@ -707,16 +668,16 @@ def _expr_assignment(traverser, node):
         elif token in ('<<=', '>>=', '>>>=') and gright < 0:
             # The user is doing weird bitshifting that will return 0 in JS but
             # not in Python.
-            left.set_value(0, traverser=traverser)
+            left.set_value(0)
             return left
         elif (token in ('<<=', '>>=', '>>>=', '|=', '^=', '&=') and
               (abs(gleft) == float('inf') or abs(gright) == float('inf'))):
             # Don't bother handling infinity for integer-converted operations.
-            left.set_value(get_NaN(traverser), traverser=traverser)
+            left.set_value(float('nan'))
             return left
 
         traverser._debug('ASSIGNMENT::L-value global? (%s)' %
-                         ('Y' if left.is_global else 'N'), 1)
+                         ('Y' if left.hooks else 'N'), 1)
         try:
             new_value = operators[token]()
         except Exception:
@@ -729,7 +690,7 @@ def _expr_assignment(traverser, node):
             new_value = new_value[:MAX_STR_SIZE]
 
         traverser._debug('ASSIGNMENT::New value >> %s' % new_value, 1)
-        left.set_value(new_value, traverser=traverser)
+        left.set_value(new_value)
         return left
 
     # Though it would otherwise be a syntax error, we say that 4=5 should
@@ -765,7 +726,7 @@ def _expr_binary(traverser, node):
                 node['right']['name'] == 'Function'):
             # We make an exception for instanceof's r-value if it's a
             # dangerous global, specifically Function.
-            return JSWrapper(True, traverser=traverser)
+            return traverser.wrap(value=True)
         else:
             right = traverser._traverse_node(node['right'])
             traverser._debug('Is dirty? %r' % right.dirty, 1)
@@ -775,6 +736,7 @@ def _expr_binary(traverser, node):
 
 def _binary_op(operator, left, right, traverser):
     """Perform a binary operation on two pre-traversed nodes."""
+    # FIXME: Why is all of this logic duplicated for assignment ops?
 
     # Dirty l or r values mean we can skip the expression. A dirty value
     # indicates that a lazy operation took place that introduced some
@@ -786,13 +748,14 @@ def _binary_op(operator, left, right, traverser):
         return right
 
     # Binary expressions are only executed on literals.
-    left = left.get_literal_value()
+    left_wrap = left
+    left = left.as_primitive()
     right_wrap = right
-    right = right.get_literal_value()
+    right = right.as_primitive()
 
     # Coerce the literals to numbers for numeric operations.
-    gleft = _get_as_num(left)
-    gright = _get_as_num(right)
+    gleft = left_wrap.as_float()
+    gright = right_wrap.as_float()
 
     operators = {
         '==': lambda: left == right or gleft == gright,
@@ -803,15 +766,16 @@ def _binary_op(operator, left, right, traverser):
         '<': lambda: left < right,
         '<=': lambda: left <= right,
         '>=': lambda: left >= right,
-        '<<': lambda: int(gleft) << int(gright),
-        '>>': lambda: int(gleft) >> int(gright),
-        '>>>': lambda: float(abs(int(gleft)) >> int(gright)),
+        '<<': lambda: left_wrap.as_int() << right_wrap.as_int(),
+        '>>': lambda: left_wrap.as_int() >> right_wrap.as_int(),
+        # This is wrong.
+        '>>>': lambda: abs(left_wrap.as_int()) >> right_wrap.as_int(),
         '+': lambda: left + right,
         '-': lambda: gleft - gright,
         '*': lambda: gleft * gright,
-        '/': lambda: 0 if gright == 0 else (gleft / gright),
-        '%': lambda: 0 if gright == 0 else (gleft % gright),
-        'in': lambda: right_wrap.contains(left),
+        '/': lambda: float('inf') if gright == 0 else (gleft / gright),
+        '%': lambda: float('nan') if gright == 0 else (gleft % gright),
+        'in': lambda: right_wrap.contains(left_wrap),
         # TODO : implement instanceof
         # FIXME(Kris): Treat instanceof the same as `QueryInterface`
     }
@@ -824,18 +788,17 @@ def _binary_op(operator, left, right, traverser):
         # Concatenation can be silly, so always turn undefineds into empty
         # strings and if there are strings, make everything strings.
         if operator == '+':
-            if left is None:
-                left = ''
-            if right is None:
-                right = ''
             if isinstance(left, basestring) or isinstance(right, basestring):
-                left = _get_as_str(left)
-                right = _get_as_str(right)
+                left = left_wrap.as_str()
+                right = right_wrap.as_str()
+            else:
+                left = gleft
+                right = gright
 
         # Don't even bother handling infinity if it's a numeric computation.
         if (operator in ('<<', '>>', '>>>') and
                 (abs(gleft) == float('inf') or abs(gright) == float('inf'))):
-            return get_NaN(traverser)
+            return traverser.wrap(float('nan'))
 
         try:
             output = operators[operator]()
@@ -848,7 +811,7 @@ def _binary_op(operator, left, right, traverser):
                 len(output) > MAX_STR_SIZE):
             output = output[:MAX_STR_SIZE]
 
-        wrapper = JSWrapper(output, traverser=traverser)
+        wrapper = traverser.wrap(output)
 
         # Test the newly-created literal for dangerous values.
         # This may cause duplicate warnings for strings which
@@ -857,22 +820,20 @@ def _binary_op(operator, left, right, traverser):
 
         return wrapper
 
-    return JSWrapper(output, traverser=traverser)
+    return traverser.wrap(output)
 
 
 def _expr_unary(traverser, node):
     """Evaluate a UnaryExpression node."""
 
     expr = traverser._traverse_node(node['argument'])
-    expr_lit = expr.get_literal_value()
-    expr_num = _get_as_num(expr_lit)
 
-    operators = {'-': lambda: -1 * expr_num,
-                 '+': lambda: expr_num,
-                 '!': lambda: not expr_lit,
-                 '~': lambda: -1 * (expr_num + 1),
-                 'void': lambda: None,
-                 'typeof': lambda: _expr_unary_typeof(expr),
+    operators = {'-': lambda: -1 * expr.as_float(),
+                 '+': lambda: expr.as_float(),
+                 '!': lambda: not expr.as_bool(),
+                 '~': lambda: -1 * (expr.as_int() + 1),
+                 'void': lambda: Undefined,
+                 'typeof': lambda: expr.typeof(),
                  'delete': lambda: None}  # We never want to empty the context
     if node['operator'] in operators:
         output = operators[node['operator']]()
@@ -880,73 +841,5 @@ def _expr_unary(traverser, node):
         output = None
 
     if not isinstance(output, JSWrapper):
-        output = JSWrapper(output, traverser=traverser)
+        output = traverser.wrap(output)
     return output
-
-
-def _expr_unary_typeof(wrapper):
-    """Evaluate the "typeof" value for a JSWrapper object."""
-    if (wrapper.callable or
-        (wrapper.is_global and 'return' in wrapper.value and
-         'value' not in wrapper.value)):
-        return 'function'
-
-    value = wrapper.value
-    if value is None:
-        return 'undefined'
-    elif isinstance(value, JSLiteral):
-        value = value.value
-        if isinstance(value, bool):
-            return 'boolean'
-        elif isinstance(value, (int, long, float)):
-            return 'number'
-        elif isinstance(value, types.StringTypes):
-            return 'string'
-    return 'object'
-
-
-def _get_as_num(value):
-    """Return the JS numeric equivalent for a value."""
-
-    if isinstance(value, JSWrapper):
-        value = value.get_literal_value()
-    if value is None:
-        return 0
-
-    try:
-        if isinstance(value, types.StringTypes):
-            if value.startswith('0x'):
-                return int(value, 16)
-            else:
-                return float(value)
-        elif isinstance(value, (int, float, long)):
-            return value
-        else:
-            return int(value)
-    except (ValueError, TypeError):
-        return 0
-
-
-def _get_as_str(value):
-    """Return the JS string equivalent for a literal value."""
-
-    if isinstance(value, JSWrapper):
-        value = value.get_literal_value()
-    if value is None:
-        return ''
-
-    if isinstance(value, bool):
-        return u'true' if value else u'false'
-    elif isinstance(value, (int, float, long)):
-        if value == float('inf'):
-            return u'Infinity'
-        elif value == float('-inf'):
-            return u'-Infinity'
-
-        # Try to see if we can shave off some trailing significant figures.
-        try:
-            if int(value) == value:
-                return unicode(int(value))
-        except ValueError:
-            pass
-    return unicode(value)

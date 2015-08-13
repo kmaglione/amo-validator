@@ -4,7 +4,6 @@ from validator.errorbundler import maybe_tuple, merge_description
 from validator.decorator import define_post_init
 from validator.testcases.regex import javascript as regex_javascript
 from validator.testcases.regex.javascript import JSRegexTest, STRING_REGEXPS
-from . import actions
 from .instanceactions import INSTANCE_DEFINITIONS
 from .jstypes import JSLiteral, JSWrapper
 from .predefinedentities import GLOBAL_ENTITIES, INTERFACES, build_quick_xpcom
@@ -134,7 +133,7 @@ def create_preference_branch(arguments, traverser, node, wrapper):
         if arg.is_literal():
             res = build_quick_xpcom('createInstance', 'nsIPrefBranch',
                                     traverser, wrapper=True)
-            res.value['preference_branch'] = actions._get_as_str(arg)
+            res.hooks['preference_branch'] = arg.as_str()
             return res
 
 
@@ -178,13 +177,13 @@ def set_preference(wrapper, arguments, traverser):
     parent = getattr(wrapper, 'parent', None)
     arg = traverser._traverse_node(arguments[0])
     if arg.is_literal():
-        pref = actions._get_as_str(arg)
+        pref = arg.as_str()
 
         # If we're being called on a preference branch other than the root,
         # prepend its branch name to the passed preference name.
-        if (parent and parent.is_global and
-                parent.value.get('preference_branch')):
-            pref = parent.value['preference_branch'] + pref
+        branch = parent and parent.hooks.get('preference_branch')
+        if branch:
+            pref = branch + pref
         else:
             drop_pref_messages(arg)
 
@@ -212,7 +211,7 @@ def call_pref(a, t, e):
     set_preference(JSWrapper(JSLiteral(None), traverser=traverser),
                    args, traverser)
 
-    value = actions._get_as_str(traverser._traverse_node(args[0]))
+    value = traverser._traverse_node(args[0]).as_str()
     return test_preference(value)
 
 

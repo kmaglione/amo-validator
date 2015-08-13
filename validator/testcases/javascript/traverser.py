@@ -4,10 +4,11 @@ import re
 import sys
 import types
 
+from validator import constants
 from validator.constants import DESCRIPTION_TYPES
 
 from . import actions
-from .jstypes import JSContext, JSLiteral, JSObject, JSWrapper
+from .jstypes import JSContext, JSObject, JSWrapper, Sentinel
 from .nodedefinitions import DEFINITIONS
 from .predefinedentities import GLOBAL_ENTITIES
 
@@ -58,8 +59,8 @@ class Traverser(object):
         """Write a message to the console if debugging is enabled."""
         if DEBUG:
             output = data
-            if isinstance(data, JSObject) or isinstance(data, JSContext):
-                output = data.output()
+            if isinstance(data, (JSObject, JSWrapper)):
+                output = repr(data)
 
             output = unicode(output)
             print ('. ' * (self.debug_level + indent) +
@@ -85,7 +86,7 @@ class Traverser(object):
         if self.contexts:
             # If we're running tests, save a copy of the global context for
             # inspection.
-            if IN_TESTS:
+            if constants.IN_TESTS:
                 self.err.final_context = self.contexts[0]
 
             if self.pollutable:
@@ -117,16 +118,26 @@ class Traverser(object):
                             % ', '.join(self.contexts[0].data.keys())),
                         filename=self.filename)
 
+    def wrap(self, value=Sentinel, **kw):
+        """Wraps the given value in a JSWrapper and JSValue, as appropriate,
+        with the given keyword args passed through to JSWrapper."""
+
+        if isinstance(value, JSWrapper):
+            assert value.traverser is self
+            return value
+
+        return JSWrapper(value, traverser=self, **kw)
+
     def _traverse_node(self, node, source=None):
         if node is None:
-            return JSWrapper(JSObject(), traverser=self, dirty=True)
+            return self.wrap(JSObject(), dirty=True)
 
         # Simple caching to prevent retraversal
         if '__traversal' in node and node['__traversal'] is not None:
             return node['__traversal']
 
         if isinstance(node, types.StringTypes):
-            return JSWrapper(JSLiteral(node), traverser=self)
+            return self.wrap(node)
 
         # Extract location information if it's available
         if 'loc' in node and node['loc'] is not None:
@@ -141,7 +152,7 @@ class Traverser(object):
 
                 self.err.metadata[key][node['type']] += 1
 
-            return JSWrapper(JSObject(), traverser=self, dirty=True)
+            return self.wrap(JSObject(), dirty=True)
 
         self._debug('TRAVERSE>>%s' % node['type'])
         self.debug_level += 1
@@ -169,12 +180,7 @@ class Traverser(object):
                 action_result.value.source = source
 
             if DEBUG:
-                action_debug = 'continue'
-                if action_result is not None:
-                    action_debug = (action_result.output() if
-                                    isinstance(action_result, JSWrapper) else
-                                    action_result)
-                self._debug('ACTION>>%s (%s)' % (action_debug, node['type']))
+                self._debug('ACTION>>%r (%s)' % (action_result, node['type']))
 
         if action_result is None:
             self.debug_level += 1
@@ -204,22 +210,22 @@ class Traverser(object):
         # returned to the node traversal that initiated this node's traversal.
         if returns:
             if not isinstance(action_result, JSWrapper):
-                return JSWrapper(action_result, traverser=self)
+                return self.wrap(action_result)
             node['__traversal'] = action_result
             return action_result
 
         node['__traversal'] = None
-        return JSWrapper(JSObject(), traverser=self, dirty=True)
+        return self.wrap(JSObject(), dirty=True)
 
     def _push_block_context(self):
         'Adds a block context to the current interpretation frame'
-        self.contexts.append(JSContext('block'))
+        self.contexts.append(JSContext('block', traverser=self))
 
     def _push_context(self, default=None):
         'Adds a variable context to the current interpretation frame'
 
         if default is None:
-            default = JSContext('default')
+            default = JSContext('default', traverser=self)
         self.contexts.append(default)
 
         self.debug_level += 1
@@ -262,7 +268,7 @@ class Traverser(object):
 
         self._debug('SEEK_GLOBAL>>FAILED')
         # If we can't find a variable, we always return a dummy object.
-        return JSWrapper(JSObject(), traverser=self)
+        return self.wrap(JSObject())
 
     def _is_defined(self, variable):
         return variable in GLOBAL_ENTITIES or self._is_local_variable(variable)
@@ -278,7 +284,7 @@ class Traverser(object):
             # If it has the variable, return it.
             if context.has_var(variable):
                 self._debug('SEEK>>FOUND')
-                return context.get(variable, traverser=self)
+                return context.get(variable)
 
     def _is_global(self, name):
         'Returns whether a name is a global entity'
@@ -313,12 +319,8 @@ class Traverser(object):
         entity.setdefault('name', name)
 
         # Build out the wrapper object from the global definition.
-        result = JSWrapper(is_global=True, traverser=self, lazy=True)
-        result.value = entity.copy()
+        result = self.wrap(hooks=entity, lazy=True)
         result = actions._expand_globals(self, result)
-
-        if 'context' in entity:
-            result.context = entity['context']
 
         self._debug('BUILT_GLOBAL')
 

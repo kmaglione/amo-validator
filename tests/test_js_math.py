@@ -61,7 +61,7 @@ def test_ceil():
         o = Math.ceil(0.0000001),
         p = Math.ceil(-0.0000001);
     """, {'a': 0,
-          'b': 0,
+          'b': float('nan'),
           'c': 1,
           'd': 0,
           'e': 2,
@@ -98,7 +98,7 @@ def test_floor():
         o = Math.floor(0.0000001),
         p = Math.floor(-0.0000001);
     """, {'a': 0,
-          'b': 0,
+          'b': float('nan'),
           'c': 1,
           'd': 0,
           'e': 1,

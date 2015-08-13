@@ -12,12 +12,10 @@ def test_xmlhttprequest():
     var req = Components.classes["foo.bar"]
                         .createInstance(class_);
     """)
-    print 'XHR Class:', err.final_context.get('class_').value
-    req = err.final_context.get('req').value
-    print 'Req:', req
 
-    assert 'value' in req
-    assert 'open' in req['value']
+    wrapper = err.final_context.get('req')
+
+    assert 'open' in wrapper.hooks['value']
 
 
 def test_nsiaccessibleretrieval():

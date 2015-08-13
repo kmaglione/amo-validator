@@ -1,4 +1,5 @@
 import sys
+from math import isnan
 
 from nose.tools import eq_
 
@@ -10,7 +11,9 @@ import validator.testcases.content
 import validator.testcases.scripting
 
 
-validator.testcases.scripting.traverser.IN_TESTS = True
+def is_nan(val):
+    """Return true if `val` is a float with a NaN value."""
+    return isinstance(val, float) and isnan(val)
 
 
 def _do_test(path):
@@ -38,7 +41,7 @@ def _do_test_raw(script, path='foo.js', bootstrap=False, ignore_pollution=True,
     validator.testcases.content._process_file(
         err, MockXPI(), path, script, path.lower(), not ignore_pollution)
     if err.final_context is not None:
-        print err.final_context.output()
+        print repr(err.final_context)
 
     return err
 
@@ -72,6 +75,9 @@ def _do_test_scope(script, vars):
     for var, value in vars.items():
         print 'Testing %s' % var
         var_val = _get_var(scope, var)
+        if is_nan(value):
+            assert is_nan(var_val)
+            continue
         if isinstance(var_val, float):
             var_val *= 100000
             var_val = round(var_val)
@@ -111,7 +117,7 @@ class TestCase(helper.TestCase):
                                                   self.file_path.lower(),
                                                   expose_pollution)
         if self.err.final_context is not None:
-            print self.err.final_context.output()
+            print repr(self.err.final_context)
             self.final_context = self.err.final_context
 
     def get_wrapper(self, name):

@@ -1,86 +1,241 @@
+import itertools
 import types
-import instanceproperties
+from collections import Iterable
+from math import isnan
 
 from validator.constants import JETPACK_URI_URL
+import instanceproperties
 
 
-class JSObject(object):
+class Sentinel:
+    """An object which is used for nothing other than a sentinel value."""
+
+
+class Undefined(object):
+    """A singleton representing the JavaScript `undefined` type."""
+    def __repr__(self):
+        return '[object undefined]'
+
+    def __str__(self):
+        return 'undefined'
+
+    def __nonzero__(self):
+        return False
+Undefined = Undefined()
+
+
+class JSValue(object):
+    """Base type for all JavaScript values."""
+
+    def __init__(self, traverser=None):
+        self.traverser = traverser
+
+    def is_literal(self):
+        return isinstance(self, JSLiteral)
+
+    def typeof(self):
+        """Result of the JavaScript `typeof` operator on our value."""
+        return 'object'
+
+    def as_primitive(self):
+        """Return our value as a Python version of a JavaScript primitive
+        type: unicode, float, or bool."""
+        raise NotImplemented()
+
+    def as_bool(self):
+        """Return our value as a boolean."""
+        if not self.is_literal():
+            return True
+
+        val = self.as_primitive()
+        if isinstance(val, float) and isnan(val):
+            return False
+
+        # This is how JavaScript defines boolean coercion.
+        return val not in (+0, -0, False, None, Undefined, '')
+
+    def as_int(self):
+        """Return our value as an int."""
+        try:
+            return int(self.as_float())
+        except (ValueError, OverflowError):
+            # Yes, JavaScript requires this.
+            return 0
+
+    def as_float(self):
+        """Return our value as a float."""
+        val = self.as_primitive()
+
+        if isinstance(val, (int, float, bool)):
+            return float(val)
+
+        if val is None:
+            return 0.
+
+        # Everything else is treated as a string.
+        if not isinstance(val, basestring):
+            val = str(val)
+
+        try:
+            val = val.strip()
+
+            if val.startswith(('0x', '-0x')):
+                # Hex integer.
+                return float(int(val, 16))
+
+            if val.startswith(('0o', '-0o')):
+                # Octal integer.
+                return float(int(val, 8))
+
+            if val == 'Infinity':
+                return float('inf')
+            elif val == '-Infinity':
+                return float('-inf')
+
+            if val == '':
+                # Empty string is treated as 0.
+                return 0.
+
+            if val[0].isdigit() or val[0].startswith(('+', '-')):
+                return float(val)
+        except ValueError:
+            # Anything conversion which would raise a ValueError in Python
+            # is converted to NaN in JavaScript.
+            pass
+
+        return float('nan')
+
+    def as_str(self):
+        """Return our value as a string."""
+        val = self.as_primitive()
+
+        if isinstance(val, basestring):
+            return val
+
+        if isinstance(val, float):
+            if isnan(val):
+                return 'NaN'
+            if val == float('inf'):
+                return 'Infinity'
+            if val == -float('inf'):
+                return '-Infinity'
+
+            if val == int(val):
+                val = int(val)
+        elif isinstance(val, bool):
+            return 'true' if val else 'false'
+
+        if val is None:
+            return 'null'
+
+        return str(val)
+
+
+class JSObject(JSValue):
     """
     Mimics a JS object (function) and is capable of serving as an active
     context to enable static analysis of `with` statements.
     """
 
-    def __init__(self, data=None, unwrapped=False):
+    def __init__(self, data=None, **kw):
+        super(JSObject, self).__init__(**kw)
+
         self.type_ = 'object'  # For use when an object is pushed as a context.
-        self.data = {u'prototype': lambda: JSPrototype()}
-        if data:
+        self.data = {}
+        if data is not None:
             self.data.update(data)
-        self.messages = []
-        self.is_unwrapped = unwrapped
 
-        self.recursing = False
+    is_unwrapped = False
+    recursing = False
 
-    def get(self, name, instantiate=False, traverser=None):
+    @property
+    def _value(self):
+        return self.data
+
+    def __getitem__(self, key):
+        return self.get(key)
+
+    def __setitem__(self, key, value):
+        self.set(key, value)
+
+    def __contains__(self, key):
+        return key in self.data
+
+    def __iter__(self):
+        return iter(self.data)
+
+    def contains(self, value):
+        """Return true if `value` is a key in this object. Should return the
+        same result as the JavaScript `in` operator."""
+        return value.as_str() in self.data
+
+    def keys(self):
+        return list(iter(self))
+
+    def __nonzero__(self):
+        return True
+
+    def get(self, name, instantiate=False):
         'Returns the value associated with a property name'
         name = unicode(name)
         output = None
 
         if name == 'wrappedJSObject':
-            if traverser:
-                traverser._debug('Requested unwrapped JS object...')
-            clone = JSObject(unwrapped=True)
+            clone = JSObject()
+            clone.is_unwrapped = True
             clone.data = self.data
-            return JSWrapper(clone, traverser=traverser)
+            return self.traverser.wrap(clone)
 
         if name in self.data:
             output = self.data[name]
             if callable(output):
                 output = output()
         elif instantiate:
-            output = JSWrapper(JSObject(), dirty=True, traverser=traverser)
-            self.set(name, output, traverser=traverser)
+            output = self.traverser.wrap(JSObject(), dirty=True)
+            self.set(name, output)
 
-        if traverser:
-            modifier = instanceproperties.get_operation('get', name)
-            if modifier:
-                modifier(traverser)
+        modifier = instanceproperties.get_operation('get', name)
+        if modifier:
+            modifier(self.traverser)
 
         if output is None:
-            return JSWrapper(JSObject(), dirty=True, traverser=traverser)
+            return self.traverser.wrap(JSObject(), dirty=True)
         if not isinstance(output, JSWrapper):
-            output = JSWrapper(output, traverser=traverser)
+            output = self.traverser.wrap(output)
         return output
 
     def get_literal_value(self):
+        return self.as_primitive()
+
+    def as_primitive(self):
         return u'[object Object]'
 
-    def set(self, name, value, traverser=None):
-        if traverser:
-            modifier = instanceproperties.get_operation('set', name)
-            if modifier:
-                modified_value = modifier(value, traverser)
-                if modified_value is not None:
-                    value = modified_value
+    def set(self, name, value):
+        modifier = instanceproperties.get_operation('set', name)
+        if modifier:
+            modified_value = modifier(value, self.traverser)
+            if modified_value is not None:
+                value = modified_value
 
-            if self.is_unwrapped:
-                traverser.warning(
-                    err_id=('testcases_javascript_jstypes', 'JSObject_set',
-                            'unwrapped_js_object'),
-                    warning="Assignment of unwrapped JS Object's properties.",
-                    description='Improper use of unwrapped JS objects can '
-                                'result in serious security vulnerabilities. '
-                                'Please reconsider your use of unwrapped '
-                                'JS objects.',
-                    signing_help='Please avoid assigning to properties of '
-                                 'unwrapped objects from unprivileged scopes, '
-                                 'unless you are using an export API '
-                                 '(http://mzl.la/1fvvgm9) to expose API '
-                                 'functions to content scopes. '
-                                 'In this case, however, please note that '
-                                 'your add-on will be required to undergo '
-                                 'manual code review for at least one '
-                                 'submission.',
-                    signing_severity='high')
+        if self.is_unwrapped:
+            self.traverser.warning(
+                err_id=('testcases_javascript_jstypes', 'JSObject_set',
+                        'unwrapped_js_object'),
+                warning="Assignment of unwrapped JS Object's properties.",
+                description='Improper use of unwrapped JS objects can '
+                            'result in serious security vulnerabilities. '
+                            'Please reconsider your use of unwrapped '
+                            'JS objects.',
+                signing_help='Please avoid assigning to properties of '
+                             'unwrapped objects from unprivileged scopes, '
+                             'unless you are using an export API '
+                             '(http://mzl.la/1fvvgm9) to expose API '
+                             'functions to content scopes. '
+                             'In this case, however, please note that '
+                             'your add-on will be required to undergo '
+                             'manual code review for at least one '
+                             'submission.',
+                signing_severity='high')
 
         self.data[name] = value
 
@@ -88,177 +243,167 @@ class JSObject(object):
         name = unicode(name)
         return name in self.data
 
-    def output(self):
+    def repr_keywords(self):
+        return {'unwrapped': self.is_unwrapped}
+
+    def __repr__(self):
         if self.recursing:
-            return u'(recursion)'
+            return u'<recursive-reference>'
 
-        # Prevent unruly recursion with a recursion buster.
         self.recursing = True
+        try:
+            extra = u''.join(u', {0}={1!r}'.format(key, value)
+                             for key, value in self.repr_keywords().items())
 
-        output_dict = {}
-        for key in self.data.keys():
-            if callable(self.data[key]):
-                continue
-            elif (isinstance(self.data[key], JSWrapper) and
-                  self.data[key].value == self):
-                output_dict[key] = u'(self)'
-            elif self.data[key] is None:
-                output_dict[key] = u'(None)'
-            else:
-                output_dict[key] = self.data[key].output()
-
-        # Pop from the recursion buster.
-        self.recursing = False
-
-        output = []
-        if self.is_unwrapped:
-            output.append('<unwrapped>: ')
-        output.append(str(output_dict))
-        return ''.join(output)
+            return u'<jstypes.{class_name}({value!r}{keywords})>'.format(
+                class_name=self.__class__.__name__, value=self._value,
+                keywords=extra)
+        finally:
+            self.recursing = False
 
 
 class JSContext(JSObject):
     """A variable context"""
 
-    def __init__(self, context_type, unwrapped=False):
-        super(JSContext, self).__init__(unwrapped=unwrapped)
+    def __init__(self, context_type, **kw):
+        super(JSContext, self).__init__(**kw)
         self.type_ = context_type
-        self.data = {}
 
 
 class JSWrapper(object):
     """Wraps a JS value and handles contextual functions for it."""
 
-    def __init__(self, value=None, const=False, dirty=False, lazy=False,
-                 is_global=False, traverser=None, callable=False,
-                 setter=None, context='chrome'):
+    def __init__(self, value=Sentinel, const=False, dirty=False, lazy=False,
+                 hooks=None, traverser=None, callable=False, setter=None):
 
-        if is_global:
-            assert not value
-
-        if traverser is not None:
-            traverser.debug_level += 1
-            traverser._debug('-----New JSWrapper-----')
-            if isinstance(value, JSWrapper):
-                traverser._debug('>>> Rewrap <<<')
-            traverser.debug_level -= 1
+        assert traverser is not None
 
         self.const = const
         self.traverser = traverser
         self.value = None  # Instantiate the placeholder value
-        self.is_global = False  # Not yet...
         self.dirty = False  # Also not yet...
-        self.context = context
+
+        self.hooks = hooks.copy() if hooks else {}
+
+        if 'literal' in self.hooks:
+            value = self.hooks['literal'](traverser)
 
         # Used for predetermining set operations
         self.setter = setter
 
-        if value is not None:
-            self.set_value(value, overwrite_const=True)
+        if value is Sentinel:
+            # No value -> empty object.
+            value = JSObject()
 
-        if not self.is_global:
-            self.is_global = is_global  # Globals are built seperately
+        self.set_value(value, overwrite_const=True)
 
         self.dirty = dirty or self.dirty
         self.lazy = lazy
         self.callable = callable
 
-        # This will be set in actions.py if needed.
-        self.global_parent = False
+    def is_callable(self):
+        return self.callable or ('return' in self.hooks and
+                                 'value' not in self.hooks)
 
-    def set_value(self, value, traverser=None, overwrite_const=False):
+    # Proxies for JSValue methods:
+    def typeof(self):
+        if self.is_callable():
+            # Ugh.
+            return 'function'
+        return self.value.typeof()
+
+    def as_primitive(self):
+        return self.value.as_primitive()
+
+    def as_bool(self):
+        return self.value.as_bool()
+
+    def as_int(self):
+        return self.value.as_int()
+
+    def as_float(self):
+        return self.value.as_float()
+
+    def as_str(self):
+        return self.value.as_str()
+
+    def set_value(self, value, overwrite_const=False):
         """Assigns a value to the wrapper"""
 
-        # Use a global traverser if it's present.
-        if traverser is None:
-            traverser = self.traverser
+        traverser = self.traverser
 
         if self.const and not overwrite_const:
-            traverser.err.warning(
+            traverser.warning(
                 err_id=('testcases_javascript_traverser',
                         'JSWrapper_set_value', 'const_overwrite'),
                 warning='Overwritten constant value',
                 description='A variable declared as constant has been '
-                            'overwritten in some JS code.',
-                filename=traverser.filename,
-                line=traverser.line,
-                column=traverser.position,
-                context=traverser.context)
+                            'overwritten in some JS code.')
 
         # Process any setter/modifier
         if self.setter:
-            traverser._debug('Running setter on JSWrapper...')
             value = self.setter(value, traverser) or value or None
 
-        if value == self.value:
+        if value is not None and value == self.value:
             return self
 
         # We want to obey the permissions of global objects
-        if (self.is_global and
-            (not traverser or
-             not (traverser.is_jsm or
-                  traverser.err.get_resource('em:bootstrap') == 'true')) and
-            (isinstance(self.value, dict) and
-             not self.value.get('overwriteable', True))):
-            traverser.err.warning(
+        from predefinedentities import is_shared_scope
+
+        if (not self.hooks.get('overwriteable', True) and
+                is_shared_scope(traverser)):
+            traverser.warning(
                 err_id=('testcases_javascript_jstypes', 'JSWrapper_set_value',
                         'global_overwrite'),
                 warning='Global overwrite',
                 description='An attempt to overwrite a global variable was '
-                            'made in some JS code.',
-                filename=traverser.filename,
-                line=traverser.line,
-                column=traverser.position,
-                context=traverser.context)
+                            'made in some JS code.')
             return self
 
-        if isinstance(value, (bool, str, int, float, long, unicode)):
+        if callable(value):
+            value = value(traverser)
+
+        if isinstance(value, JSValue):
+            pass
+        elif (isinstance(value, (bool, int, float, long, basestring)) or
+                value in (None, Undefined)):
             self.inspect_literal(value)
-            value = JSLiteral(value)
+            value = JSLiteral(value, traverser=self.traverser)
         # If the value being assigned is a wrapper as well, copy it in
         elif isinstance(value, JSWrapper):
             self.value = value.value
             self.lazy = value.lazy
             self.dirty = value.dirty
-            self.is_global = value.is_global
-            self.context = value.context
+            self.hooks = value.hooks
             # const does not carry over on reassignment
             return self
-        elif callable(value):
-            value = value(t=traverser)
+        elif isinstance(value, Iterable):
+            value = JSArray(value, traverser=self.traverser)
+        elif isinstance(value, dict):
+            self.hooks = value
+            value = JSObject()
 
-        if not isinstance(value, dict):
-            self.is_global = False
-        elif 'context' in value:
-            self.context = value['context']
-
+        value.traverser = self.traverser
         self.value = value
         return self
 
-    def has_property(self, property):
-        """Returns a boolean value representing the presence of a property"""
-        if isinstance(self.value, JSLiteral):
-            return False
-        return isinstance(self.value, JSObject)
-
-    def get(self, traverser, name, instantiate=False):
+    def get(self, name, instantiate=False):
         """Retrieve a property from the variable."""
 
+        traverser = self.traverser
+
         value = self.value
+        hooks = self.hooks
         dirty = value is None
-        context = self.context
-        if self.is_global:
-            if 'value' not in value:
-                output = JSWrapper(JSObject(), traverser=traverser)
-                output.value = {}
 
-                def apply_value(name):
-                    if name in self.value:
-                        output.value[name] = self.value[name]
+        # FIXME: <IS_GLOBAL>
+        if self.hooks:
+            if 'value' not in hooks:
+                output = traverser.wrap(JSObject(), hooks={'value': {}})
 
-                map(apply_value, ('dangerous', 'readonly', 'context', 'name'))
-                output.is_global = True
-                output.context = self.context
+                for key in ('dangerous', 'readonly', 'name'):
+                    if key in self.hooks:
+                        output.hooks[key] = self.hooks[key]
                 return output
 
             def _evaluate_lambdas(node):
@@ -267,7 +412,7 @@ class JSWrapper(object):
                 else:
                     return node
 
-            value_val = value['value']
+            value_val = hooks['value']
             value_val = _evaluate_lambdas(value_val)
 
             if isinstance(value_val, dict):
@@ -275,8 +420,6 @@ class JSWrapper(object):
                     value_val = _evaluate_lambdas(value_val[name])
                     output = traverser._build_global(name=name,
                                                      entity=value_val)
-                    if 'context' not in value_val:
-                        output.context = self.context
                     return output
             else:
                 value = value_val
@@ -286,17 +429,15 @@ class JSWrapper(object):
         if modifier:
             modifier(traverser)
 
-        if value is not None and issubclass(type(value), JSObject):
-            output = value.get(name, instantiate=instantiate,
-                               traverser=traverser)
-        else:
-            output = None
+        output = None
+        if isinstance(value, JSObject):
+            output = value.get(name, instantiate=instantiate)
 
         if not isinstance(output, JSWrapper):
-            output = JSWrapper(
-                output, traverser=traverser, dirty=output is None or dirty)
-
-        output.context = context
+            if output is None:
+                output = traverser.wrap(dirty=True)
+            else:
+                output = traverser.wrap(output, dirty=dirty)
 
         # If we can predetermine the setter for the wrapper, we can save a ton
         # of lookbehinds in the future. This greatly simplifies the
@@ -308,40 +449,22 @@ class JSWrapper(object):
 
     def del_value(self, member):
         """The member `member` will be deleted from the value of the wrapper"""
-        if self.is_global:
-            self.traverser.err.warning(
+        if self.hooks:
+            self.traverser.warning(
                 err_id=('testcases_js_jstypes', 'del_value',
                         'global_member_deletion'),
                 warning='Global member deletion',
-                description='Members of global object may not be deleted.',
-                filename=self.traverser.filename,
-                line=self.traverser.line,
-                column=self.traverser.position,
-                context=self.traverser.context)
-            return
-        elif isinstance(self.value, (JSObject, JSPrototype)):
-            if member not in self.value.data:
-                return
-            del self.value.data[member]
+                description='Members of global object may not be deleted.')
+
+        elif isinstance(self.value, JSObject):
+            if member in self.value.data:
+                del self.value.data[member]
 
     def contains(self, value):
-        """Serves 'in' for BinaryOperators for lists and dictionaries"""
+        """Return true if `value` is a key in our value. Should return the
+        same result as the JavaScript `in` operator."""
 
-        # Unwrap the rvalue.
-        if isinstance(value, JSWrapper):
-            value = value.get_literal_value()
-
-        if isinstance(self.value, JSArray):
-            from actions import _get_as_num
-            index = int(_get_as_num(value))
-            if len(self.value.elements) > index >= 0:
-                return True
-
-        if isinstance(self.value, (JSArray, JSObject, JSPrototype)):
-            return self.value.has_var(value)
-
-        # Nothing else supports "in"
-        return False
+        return self.value.contains(value)
 
     def is_literal(self):
         """Returns whether the content is a literal"""
@@ -349,26 +472,17 @@ class JSWrapper(object):
 
     def get_literal_value(self):
         """Returns the literal value of the wrapper"""
+        return self.value.as_primitive()
 
-        if self.is_global:
-            if 'literal' in self.value:
-                return self.value['literal'](self.traverser)
-            else:
-                return '[object Object]'
-        if self.value is None:
-            return None
+    def __repr__(self):
+        keywords = []
+        for keyword in ('dirty', 'callable', 'hooks'):
+            keywords.append('{key}={value!r}'.format(
+                key=keyword, value=getattr(self, keyword)))
 
-        output = self.value.get_literal_value()
-        return output
-
-    def output(self):
-        """Returns a readable version of the object"""
-        if self.value is None:
-            return '(None)'
-        elif self.is_global:
-            return '(Global)'
-
-        return self.value.output()
+        return u'<jstypes.{class_name}({value!r}, {keywords})>'.format(
+            class_name=self.__class__.__name__, value=self.value,
+            keywords=', '.join(keywords))
 
     def inspect_literal(self, value):
         """
@@ -379,8 +493,6 @@ class JSWrapper(object):
         # Don't do any processing if we can't return an error.
         if not self.traverser:
             return
-
-        self.traverser._debug('INSPECTING: %s' % value)
 
         if isinstance(value, types.StringTypes):
             if ('is_jetpack' in self.traverser.err.metadata and
@@ -400,106 +512,129 @@ class JSWrapper(object):
 
     def __unicode__(self):
         """Returns a textual version of the object."""
-        return unicode(self.get_literal_value())
+        return unicode(self.as_str())
 
 
 class JSLiteral(JSObject):
     """Represents a literal JavaScript value."""
 
-    def __init__(self, value=None, unwrapped=False):
-        super(JSLiteral, self).__init__(unwrapped=unwrapped)
+    def __init__(self, value=None, **kw):
+        super(JSLiteral, self).__init__(**kw)
         self.value = value
         self.source = None
+        self.messages = []
 
     def set_value(self, value):
         self.value = value
 
+    @property
+    def _value(self):
+        return self.value
+
+    def typeof(self):
+        """Result of the JavaScript `typeof` operator on our value."""
+        val = self.as_primitive()
+
+        if isinstance(val, bool):
+            return 'boolean'
+        elif isinstance(val, (int, long, float)):
+            return 'number'
+        elif isinstance(val, basestring):
+            return 'string'
+        elif val is Undefined:
+            return 'undefined'
+        elif val is None:
+            return 'object'
+        return 'object'
+
     def __str__(self):
-        if isinstance(self.value, bool):
-            return str(self.output()).lower()
-        return str(self.output())
+        return self.as_str()
 
-    def output(self):
+    def as_primitive(self):
+        """Return our value as a Python version of a JavaScript primitive
+        type: unicode, float, or bool."""
         return self.value
 
-    def get_literal_value(self):
-        'Returns the literal value of a this literal. Heh.'
-        return self.value
-
-
-class JSPrototype(JSObject):
-    """
-    A lazy JavaScript object that is assumed not to contain any default
-    methods.
-    """
-
-    def __init__(self, unwrapped=False):
-        super(JSPrototype, self).__init__(unwrapped=unwrapped)
-        self.data = {}
-
-    def get(self, name, instantiate=False, traverser=None):
-        name = unicode(name)
-        output = super(JSPrototype, self).get(name, instantiate, traverser)
-        if output is not None:
-            return output
-        if name == 'prototype':
-            prototype = JSWrapper(JSPrototype(), traverser=traverser)
-            self.data[name] = prototype
-
-        return output
+    def repr_keywords(self):
+        return dict(super(JSLiteral, self).repr_keywords(),
+                    source=self.source)
 
 
 class JSArray(JSObject):
     """A class that represents both a JS Array and a JS list."""
 
-    def __init__(self, unwrapped=False):
-        super(JSArray, self).__init__(unwrapped=unwrapped)
-        self.elements = []
+    def __init__(self, elements=None, **kw):
+        super(JSArray, self).__init__(**kw)
+        if elements is not None:
+            self.elements = map(self.traverser.wrap, elements)
+        else:
+            self.elements = []
 
-    def get(self, index, instantiate=False, traverser=None):
-        if index == 'length':
+    @property
+    def _value(self):
+        return self.elements
+
+    def __len__(self):
+        return len(self.elements)
+
+    def __contains__(self, key):
+        return (isinstance(key, int) and 0 <= key < len(self.elements) or
+                super(JSArray, self).__contains__(key))
+
+    def __iter__(self):
+        return itertools.chain(range(0, len(self.elements)),
+                               super(JSArray, self).__iter__())
+
+    def contains(self, value):
+        """Return true if `value` is an element in this Array, or a property
+        of this Object. Should return the same result as the JavaScript `in`
+        operator."""
+
+        if value.as_str().isdigit():
+            return value.as_int() in self
+        return value.as_str() in self
+
+    def get(self, name, instantiate=False):
+        if name == 'length':
             return len(self.elements)
 
-        # Courtesy of Ian Bicking: http://bit.ly/hxv6qt
         try:
-            output = self.elements[int(index.strip().split()[0])]
-            if not isinstance(output, JSWrapper):
-                output = JSWrapper(output, traverser=traverser)
-            return output
-        except (ValueError, IndexError, KeyError):
-            return super(JSArray, self).get(index, instantiate, traverser)
+            if isinstance(name, (int, long, float)) or name.isdigit():
+                output = self.elements[int(name)]
 
-    def get_literal_value(self):
-        """Arrays return a comma-delimited version of themselves."""
+                if not isinstance(output, JSWrapper):
+                    output = self.traverser.wrap(output)
+                return output
+        except (ValueError, IndexError, KeyError):
+            pass
+
+        return super(JSArray, self).get(name, instantiate)
+
+    def as_primitive(self):
+        """Return a comma-separated string representation of each of our
+        elements."""
 
         if self.recursing:
-            return u'(recursion)'
+            return u''
 
         self.recursing = True
+        try:
+            return u','.join(elem.as_str() if elem is not None else u''
+                             for elem in self.elements)
+        finally:
+            self.recursing = False
 
-        # Interestingly enough, this allows for things like:
-        # x = [4]
-        # y = x * 3 // y = 12 since x equals "4"
-
-        output = u','.join(
-            [unicode(w.get_literal_value() if w is not None else u'') for w in
-             self.elements if
-             not (isinstance(w, JSWrapper) and w.value == self)])
-
-        self.recursing = False
-        return output
-
-    def set(self, index, value, traverser=None):
+    def set(self, index, value):
         try:
             index = int(index)
             # Ignore floating point indexes
             if index != float(index) or index < 0:
-                return super(JSArray, self).set(value, traverser)
+                return super(JSArray, self).set(index, value)
         except ValueError:
-            return super(JSArray, self).set(index, value, traverser)
+            return super(JSArray, self).set(index, value)
 
         if len(self.elements) > index:
-            self.elements[index] = JSWrapper(value=value, traverser=traverser)
+            self.elements[index] = self.traverser.wrap(value)
         else:
             # Max out the array size at 100000
             index = min(index, 100000)
@@ -507,7 +642,4 @@ class JSArray(JSObject):
             # list with nulls
             while len(self.elements) < index:
                 self.elements.append(None)
-            self.elements.append(JSWrapper(value=value, traverser=traverser))
-
-    def output(self):
-        return u'[%s]' % self.get_literal_value()
+            self.elements.append(self.traverser.wrap(value))

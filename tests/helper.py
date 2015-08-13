@@ -9,12 +9,16 @@ from mock import sentinel
 # Import this first so we get the same order of imports as runtime,
 # and avoid import loops.
 import validator.validate  # noqa
+from validator import constants
 from validator.submain import populate_chrome_manifest
 from validator.rdf import RDFParser
 from validator.xpi import XPIManager
 from validator.errorbundler import ErrorBundle
 from validator.outputhandlers.shellcolors import OutputHandler
 import validator.testcases.regex as regex
+
+
+constants.IN_TESTS = True
 
 
 def _do_test(path, test, failure=True,
