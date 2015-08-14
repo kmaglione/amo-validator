@@ -112,7 +112,7 @@ class TestCase(unittest.TestCase):
         """
         self.err = None
 
-    def setup_err(self, for_appversions=None):
+    def setup_err(self, for_appversions=None, instant=False):
         """
         Instantiate the error bundle object. Use the `instant` parameter to
         have it output errors as they're generated. `for_appversions` may be
@@ -121,7 +121,7 @@ class TestCase(unittest.TestCase):
         An existing error bundle will be overwritten with a fresh one that has
         the state that the test case was setup with.
         """
-        self.err = ErrorBundle(instant=True,
+        self.err = ErrorBundle(instant=instant,
                                for_appversions=for_appversions or {},
                                listed=self.listed)
         self.err.handler = OutputHandler(sys.stdout, True)

@@ -1,3 +1,5 @@
+from collections import namedtuple
+
 import actions
 
 #(branches,
@@ -8,11 +10,15 @@ import actions
 # block_statement,
 #)
 
+Node = namedtuple('Node', ('branches', 'dynamic', 'action', 'returns',
+                           'is_block'))
+
+
 def node(branches=None, dynamic=False, action=None, returns=False,
          is_block=False):
     if branches is None:
         branches = ()
-    return branches, dynamic, action, returns, is_block
+    return Node(branches, dynamic, action, returns, is_block)
 
 
 DEFINITIONS = {

@@ -75,7 +75,7 @@ class Traverser(object):
         self._debug('START>>')
         try:
             self.function_collection.append([])
-            self._traverse_node(data)
+            self.traverse(data)
 
             func_coll = self.function_collection.pop()
             for func in func_coll:
@@ -131,17 +131,27 @@ class Traverser(object):
 
         return JSWrapper(value, traverser=self, **kw)
 
-    def _traverse_node(self, node, source=None):
+    def _traverse_node(self, node):
+        # Deprecated wrapper.
+        return self.traverse(node)
+
+    def traverse(self, node, source=None):
         if node is None:
             return self.wrap(dirty=True)
-
-        # Simple caching to prevent retraversal
-        if '__traversal' in node and node['__traversal'] is not None:
-            return node['__traversal']
 
         if isinstance(node, types.StringTypes):
             return self.wrap(node)
 
+        # Simple caching to prevent re-traversal
+        if '__traversal' not in node:
+            with self._debug('TRAVERSE>>%s' % node['type']):
+                result = self.wrap(self._traverse(node, source))
+                result.parse_node = node
+            node['__traversal'] = result
+
+        return node['__traversal']
+
+    def _traverse(self, node, source=None):
         # Extract location information if it's available
         if 'loc' in node and node['loc'] is not None:
             self.line = self.start_line + int(node['loc']['start']['line'])
@@ -157,72 +167,64 @@ class Traverser(object):
 
             return self.wrap(dirty=True)
 
-        self._debug('TRAVERSE>>%s' % node['type'])
-        self.debug_level += 1
-
         # Extract properties about the node that we're traversing
-        (branches, establish_context, action, returns,
-         block_level) = DEFINITIONS[node['type']]
+        node_def = DEFINITIONS[node['type']]
 
         # If we're supposed to establish a context, do it now
-        if establish_context:
-            self._push_context()
-        elif block_level:
-            self._push_block_context()
+        pushed_context = self.push_context(node_def)
 
-        # An action allows the traverser to make intelligent decisions based
-        # on the function of the code, rather than just the content. If an
-        # action is availble, run it and store the output.
+        # An action allows the traverser to make intelligent decisions
+        # based on the function of the code, rather than just the content.
+        # If an action is availble, run it and store the output.
         action_result = None
-        if action is not None:
-            action_result = action(self, node)
-            # Special case, for immediate literals, define a source property.
-            # Used for determining when literals are passed directly
-            # as arguments.
+        if node_def.action:
+            action_result = node_def.action(self, node)
+            # Special case, for immediate literals, define a source
+            # property. Used for determining when literals are passed
+            # directly as arguments.
             if node['type'] == 'Literal':
                 action_result.value.source = source
 
-            if DEBUG:
-                self._debug('ACTION>>%r (%s)' % (action_result, node['type']))
-
         if action_result is None:
-            self.debug_level += 1
-            # Use the node definition to determine and subsequently traverse
-            # each of the branches.
-            for branch in branches:
+            # Use the node definition to determine and subsequently
+            # traverse each of the branches.
+            for branch in node_def.branches:
                 if branch in node:
                     self._debug('BRANCH>>%s' % branch)
-                    b = node[branch]
-                    if isinstance(b, list):
-                        map(self._traverse_node, b)
+                    branch = node[branch]
+                    if isinstance(branch, list):
+                        map(self.traverse, branch)
                     else:
-                        self._traverse_node(b)
-            self.debug_level -= 1
+                        self.traverse(branch)
 
-        # If we defined a context, pop it.
-        if establish_context or block_level:
+        # WithStatements declare two blocks: one for the block and one for
+        # the object that's being withed. We need both because of `let`s.
+        if node['type'] == 'WithStatement':
             self._pop_context()
-            # WithStatements declare two blocks: one for the block and one for
-            # the object that's being withed. We need both because of `let`s.
-            if node['type'] == 'WithStatement':
-                self._pop_context()
-
-        self.debug_level -= 1
+        if pushed_context:
+            self._pop_context()
 
         # If there is an action and the action returned a value, it should be
         # returned to the node traversal that initiated this node's traversal.
-        if returns:
-            if not isinstance(action_result, JSWrapper):
-                return self.wrap(action_result)
-            node['__traversal'] = action_result
+        if node_def.returns and action_result is not None:
             return action_result
 
-        node['__traversal'] = None
         return self.wrap(dirty=True)
+
+    def push_context(self, node):
+        if node.dynamic:
+            self._push_context()
+            return True
+        elif node.is_block:
+            self._push_block_context()
+            return True
 
     def _push_block_context(self):
         'Adds a block context to the current interpretation frame'
         self.contexts.append(JSContext('block', traverser=self))
+
+        self.debug_level += 1
+        self._debug('CONTEXT>>%d' % len(self.contexts))
 
     def _push_context(self, default=None):
         'Adds a variable context to the current interpretation frame'
@@ -301,7 +303,7 @@ class Traverser(object):
             dang = entity.get('dangerous', entity.get('dangerous_on_read'))
 
             if callable(dang):
-                dang = dang(self._traverse_node, self.err)
+                dang = dang(self.traverse, self.err)
 
             if dang:
                 kwargs = dict(

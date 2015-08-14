@@ -24,10 +24,10 @@ def _do_test(path):
 
 
 def _do_test_raw(script, path='foo.js', bootstrap=False, ignore_pollution=True,
-                 detected_type=None, jetpack=False):
+                 detected_type=None, jetpack=False, instant=False):
     """Perform a test on a JS file."""
 
-    err = ErrorBundle(instant=True)
+    err = ErrorBundle(instant=instant)
     if jetpack:
         err.metadata['is_jetpack'] = True
 

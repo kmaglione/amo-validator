@@ -555,7 +555,7 @@ class ErrorBundle(object):
         'Prints a message and takes care of all sorts of nasty code'
 
         # Load up the standard output.
-        output = ['\n', prefix, message['message']]
+        output = ['\n', prefix, ': ', message['message']]
 
         # We have some extra stuff for verbose mode.
         if verbose:
