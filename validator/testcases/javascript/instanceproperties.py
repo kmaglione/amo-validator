@@ -6,10 +6,8 @@ import jstypes
 def set_on_event(new_value, traverser):
     """Ensure that on* properties are not assigned string values."""
 
-    is_literal = new_value.is_literal()
-
-    if (is_literal and
-            isinstance(new_value.get_literal_value(), types.StringTypes)):
+    if (new_value.is_clean_literal() and
+            isinstance(new_value.as_primitive(), types.StringTypes)):
         traverser.warning(
             err_id=('testcases_javascript_instancetypes', 'set_on_event',
                     'on*_str_assignment'),
@@ -23,8 +21,9 @@ def set_on_event(new_value, traverser):
                          'assigning to is not an event listener, please '
                          'consider renaming it, if at all possible.',
             signing_severity='medium')
-    elif (not is_literal and isinstance(new_value.value, jstypes.JSObject) and
-          'handleEvent' in new_value.value.data):
+
+    elif (isinstance(new_value.value, jstypes.JSObject) and
+            'handleEvent' in new_value.value):
         traverser.warning(
             err_id=('js', 'on*', 'handleEvent'),
             warning='`handleEvent` no longer implemented in Gecko 18.',

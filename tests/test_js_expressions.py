@@ -73,8 +73,8 @@ def test_signed_zero():
     eq_(_get_var(scope, 'f'), False)
 
 
-def test_typecasting():
-    """Test that types are properly casted."""
+def test_equality_type_coercion():
+    """Test that types are properly coerced in equality operations."""
 
     scope = _do_test_raw("""
     var a = 1 == '1',
@@ -124,4 +124,3 @@ def test_addition_expressions():
     eq_(_get_var(scope, 'b'), 1)
     eq_(_get_var(scope, 'c'), 99)
     eq_(_get_var(scope, 'd'), 99)
-

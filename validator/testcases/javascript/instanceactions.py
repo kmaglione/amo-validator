@@ -45,7 +45,7 @@ def createElement(args, traverser, node, wrapper):
     name = args[0]
     if name.as_str().lower() == u'script':
         _create_script_tag(traverser)
-    elif not name.is_literal():
+    elif not name.is_clean_literal():
         _create_variable_element(traverser)
 
 
@@ -60,7 +60,7 @@ def createElementNS(args, traverser, node, wrapper):
     name = args[1]
     if 'script' in name.as_str().lower():
         _create_script_tag(traverser)
-    elif not name.is_literal():
+    elif not name.is_clean_literal():
         _create_variable_element(traverser)
 
 

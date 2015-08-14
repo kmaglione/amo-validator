@@ -491,6 +491,10 @@ class JSWrapper(object):
         """Returns whether the content is a literal"""
         return isinstance(self.value, JSLiteral)
 
+    def is_clean_literal(self):
+        """Returns whether the content is known literal."""
+        return not self.dirty and isinstance(self.value, JSLiteral)
+
     def get_literal_value(self):
         """Returns the literal value of the wrapper"""
         return self.value.as_primitive()

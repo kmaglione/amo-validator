@@ -188,7 +188,7 @@ def math_round(wrapper, arguments, traverser):
 
 
 def open_in_chrome_context(uri, method, traverser):
-    if not uri.is_literal():
+    if not uri.is_clean_literal():
         traverser.err.notice(
             err_id=('js', 'instanceactions', '%s_nonliteral' % method),
             notice='`%s` called with non-literal parameter.' % method,
@@ -202,7 +202,7 @@ def open_in_chrome_context(uri, method, traverser):
             context=traverser.context)
 
     remote_url = re.compile(r'^(https?|ftp|data):(//)?', re.I)
-    uri = unicode(uri.get_literal_value())
+    uri = uri.as_str()
     if uri.startswith('//') or remote_url.match(uri):
         traverser.warning(
             err_id=('js', 'instanceactions', '%s_remote_uri' % method),

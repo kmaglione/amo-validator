@@ -81,7 +81,7 @@ hook_interface(('nsIWindowWatcher', 'addListener'),
 def addCategoryEntry(a, t, e):
     if e.get_resource('em:bootstrap'):
         args = map(t, a)
-        if len(args) > 3 and args[3].is_literal():
+        if len(args) > 3 and args[3].as_bool():
             return ('Bootstrapped add-ons may not create persistent category '
                     'entries.')
         else:

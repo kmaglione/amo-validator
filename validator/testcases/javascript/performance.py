@@ -20,7 +20,7 @@ def _check_dynamic_sql(args, traverser, node=None, wrapper=None):
     """
 
     simple_args = map(traverser._traverse_node, args)
-    if len(args) >= 1 and not simple_args[0].is_literal():
+    if len(args) >= 1 and not simple_args[0].is_clean_literal():
         traverser.warning(
             err_id=('js', 'instanceactions', 'executeSimpleSQL_dynamic'),
             warning='SQL statements should be static strings',

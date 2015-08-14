@@ -162,7 +162,7 @@ def get_preference(wrapper, arguments, traverser):
 
     if len(arguments) >= 1:
         arg = traverser._traverse_node(arguments[0])
-        if arg.is_literal():
+        if arg.is_clean_literal():
             drop_pref_messages(arg)
 
 
@@ -183,7 +183,7 @@ def set_preference(wrapper, arguments, traverser):
         branch = parent and parent.hooks.get('preference_branch')
         if branch:
             pref = branch + pref
-        else:
+        elif arg.is_clean_literal():
             drop_pref_messages(arg)
 
         kw = {'err_id': ('testcases_javascript_actions',

@@ -72,60 +72,58 @@ def set_HTML(function, new_value, traverser):
 
     new_value = traverser.wrap(new_value)
     if new_value.is_literal():
-        literal_value = new_value.get_literal_value()
-        if isinstance(literal_value, basestring):
-            # Static string assignments
+        literal_value = new_value.as_str()
+        # Static string assignments
 
-            HELP = ('Please avoid including JavaScript fragments in '
-                    'HTML stored in JavaScript strings. Event listeners '
-                    'should be added via `addEventListener` after the HTML '
-                    'has been injected.',
-                    'Injecting <script> nodes should be avoided when at all '
-                    'possible. If you cannot avoid loading a script directly '
-                    'into a content document, please consider doing so via '
-                    'the subscript loader (http://mzl.la/1VGxOPC) instead. '
-                    'If the subscript loader is not available, then the '
-                    'script nodes should be created using `createElement`, '
-                    'and should use a `src` attribute pointing to a '
-                    '`resource:` URL within your extension.')
+        HELP = ('Please avoid including JavaScript fragments in '
+                'HTML stored in JavaScript strings. Event listeners '
+                'should be added via `addEventListener` after the HTML '
+                'has been injected.',
+                'Injecting <script> nodes should be avoided when at all '
+                'possible. If you cannot avoid loading a script directly '
+                'into a content document, please consider doing so via '
+                'the subscript loader (http://mzl.la/1VGxOPC) instead. '
+                'If the subscript loader is not available, then the '
+                'script nodes should be created using `createElement`, '
+                'and should use a `src` attribute pointing to a '
+                '`resource:` URL within your extension.')
 
-            # Test for on* attributes and script tags.
-            if EVENT_ASSIGNMENT.search(literal_value.lower()):
-                traverser.warning(
-                    err_id=('testcases_javascript_instancetypes',
-                            'set_%s' % function, 'event_assignment'),
-                    warning='Event handler assignment via %s' % function,
-                    description=('When assigning event handlers, %s '
-                                 'should never be used. Rather, use a '
-                                 'proper technique, like addEventListener.'
-                                 % function,
-                                 'Event handler code: %s'
-                                 % literal_value.encode('ascii', 'replace')),
-                    signing_help=HELP,
-                    signing_severity='medium')
+        # Test for on* attributes and script tags.
+        if EVENT_ASSIGNMENT.search(literal_value.lower()):
+            traverser.warning(
+                err_id=('testcases_javascript_instancetypes',
+                        'set_%s' % function, 'event_assignment'),
+                warning='Event handler assignment via %s' % function,
+                description=('When assigning event handlers, %s '
+                             'should never be used. Rather, use a '
+                             'proper technique, like addEventListener.'
+                             % function,
+                             'Event handler code: %s'
+                             % literal_value.encode('ascii', 'replace')),
+                signing_help=HELP,
+                signing_severity='medium')
 
-            elif ('<script' in literal_value or
-                  JS_URL.search(literal_value)):
-                traverser.warning(
-                    err_id=('testcases_javascript_instancetypes',
-                            'set_%s' % function, 'script_assignment'),
-                    warning='Scripts should not be created with `%s`'
-                            % function,
-                    description='`%s` should not be used to add scripts to '
-                                'pages via script tags or JavaScript URLs. '
-                                'Instead, use event listeners and external '
-                                'JavaScript.' % function,
-                    signing_help=HELP,
-                    signing_severity='medium')
+        if '<script' in literal_value or JS_URL.search(literal_value):
+            traverser.warning(
+                err_id=('testcases_javascript_instancetypes',
+                        'set_%s' % function, 'script_assignment'),
+                warning='Scripts should not be created with `%s`'
+                        % function,
+                description='`%s` should not be used to add scripts to '
+                            'pages via script tags or JavaScript URLs. '
+                            'Instead, use event listeners and external '
+                            'JavaScript.' % function,
+                signing_help=HELP,
+                signing_severity='medium')
 
-            else:
-                # Everything checks out, but we still want to pass it through
-                # the markup validator. Turn off strict mode so we don't get
-                # warnings about malformed HTML.
-                from validator.testcases.markup.markuptester import (
-                    MarkupParser)
-                parser = MarkupParser(traverser.err, strict=False, debug=True)
-                parser.process(traverser.filename, literal_value, 'html')
+    if new_value.is_clean_literal():
+        # Everything checks out, but we still want to pass it through
+        # the markup validator. Turn off strict mode so we don't get
+        # warnings about malformed HTML.
+        from validator.testcases.markup.markuptester import (
+            MarkupParser)
+        parser = MarkupParser(traverser.err, strict=False, debug=True)
+        parser.process(traverser.filename, literal_value, 'html')
 
     else:
         # Variable assignments
@@ -356,7 +354,8 @@ def set_contentScript(value, traverser):
 
         test_js_file(traverser.err, traverser.filename, content_script,
                      line=traverser.line, context=traverser.context)
-    else:
+
+    if not value.is_clean_literal():
         traverser.warning(
             err_id=('testcases_javascript_instanceproperties',
                     'contentScript', 'set_non_literal'),

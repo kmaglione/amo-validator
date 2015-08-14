@@ -1,7 +1,6 @@
+import re
 from copy import deepcopy
-from functools import partial
-import sys
-import types
+from functools import partial, wraps
 
 # Global import of predefinedentities will cause an import loop
 import instanceactions
@@ -14,11 +13,254 @@ from jstypes import JSArray, JSContext, JSObject, JSWrapper, Undefined
 
 NUMERIC_TYPES = (int, long, float, complex)
 
-# None of these operations (or their augmented assignment counterparts) should
-# be performed on non-numeric data. Any time we get non-numeric data for these
-# guys, we just return NaN.
-NUMERIC_OPERATORS = ('-', '*', '/', '%', '<<', '>>', '>>>', '|', '^', '&')
-NUMERIC_OPERATORS += tuple('%s=' % op for op in NUMERIC_OPERATORS)
+
+def clean_dirty(wrapper):
+    """If the given wrapper is dirty, and has a string value, clean up repeated
+    occurrences of '[object Object]."""
+    if (wrapper.dirty and wrapper.is_literal() and
+            isinstance(wrapper.as_primitive(), basestring)):
+        wrapper.value.value = re.sub(r'(?:\[object Object]){2,}',
+                                     '[object Object]', wrapper.value.value)
+
+
+def operator(op):
+    def decorator(fn):
+        fn.operator = op
+        return fn
+    return decorator
+
+
+def relational_operator(op):
+    """Wrap an operator method so that its values are both of the correct
+    primitive type for a relational comparison."""
+    def decorator(fn):
+        @operator(op)
+        @wraps(fn)
+        def wrapper(self, left, right):
+            left, right = self.relational_values(left, right)
+            return fn(self, left, right)
+        return wrapper
+    return decorator
+
+
+class Operators(object):
+    class __metaclass__(type):
+        def __new__(mcls, name, bases, dict_):
+            cls = type.__new__(mcls, name, bases, dict_)
+            cls.OPERATORS = {method.operator: name
+                             for name, method in dict_.iteritems()
+                             if getattr(method, 'operator', None)}
+            return cls
+
+    def __init__(self, traverser):
+        self.traverser = traverser
+
+    def __getitem__(self, operator):
+        return getattr(self, self.OPERATORS[operator])
+
+    def __contains__(self, operator):
+        return operator in self.OPERATORS
+
+
+class BinaryOps(Operators):
+    def relational_values(self, left, right):
+        """Converts two JS values to the primitive types that JavaScript
+        would use for relational operators."""
+        if (isinstance(left.as_primitive(), basestring) and
+                isinstance(right.as_primitive(), basestring)):
+            # If both values are strings, we compare them as strings.
+            return left.as_str(), right.as_str()
+
+        # Otherwise, we compare them as numbers.
+        return left.as_float(), right.as_float()
+
+    @operator('==')
+    def equal(self, left, right):
+        """Return true if values would compare equal in JavaScript."""
+        if left.typeof() == right.typeof():
+            # The two values are of the same JS type. Use strict equality.
+            return self.identical(left, right)
+
+        # Because JavaScript:
+
+        number = (int, float, bool)
+
+        # `x` and `y` per the ECMAScript spec.
+        x = left.as_primitive()
+        y = right.as_primitive()
+
+        if x in (None, Undefined) and y in (None, Undefined):
+            return True
+
+        if (isinstance(x, basestring) and isinstance(y, number) or
+                isinstance(y, basestring) and isinstance(x, number)):
+            # One string and one number. Coerce both to numbers.
+            return left.as_float() == right.as_float()
+
+        # Close enough.
+        return (left.as_primitive() == right.as_primitive() or
+                left.as_str() == right.as_str())
+
+    @operator('!=')
+    def not_equal(self, left, right):
+        """Return true if values would not compare equal in JavaScript."""
+        return not self.equal(left, right)
+
+    @operator('===')
+    def identical(self, left, right):
+        """Return true if values would compare as identical in JavaScript."""
+        if left.is_literal() and right.is_literal():
+            return left.as_primitive() == right.as_primitive()
+
+        return left.value is right.value
+
+    @operator('!==')
+    def not_identical(self, left, right):
+        """Return true if values would not compare as identical in
+        JavaScript."""
+        return not self.identical(left, right)
+
+    @relational_operator('>')
+    def greater(self, left, right):
+        """Return true if `left` would compare greater than `right` in
+        JavaScript."""
+        return left > right
+
+    @relational_operator('<')
+    def less(self, left, right):
+        """Return true if `left` would compare less than `right` in
+        JavaScript."""
+        return left < right
+
+    @relational_operator('>=')
+    def gte(self, left, right):
+        """Return true if `left` would compare grater than or equal to `right`
+        in JavaScript."""
+        return left >= right
+
+    @relational_operator('<=')
+    def lte(self, left, right):
+        """Return true if `left` would less grater than or equal to `right`
+        in JavaScript."""
+        return left <= right
+
+    @operator('<<')
+    def left_shift(self, left, right):
+        """Arithmetically bit-shift `left`, `right` places to the left."""
+        return left.as_int() << (right.as_int() & 0x7fffffff)
+
+    @operator('>>')
+    def right_shift(self, left, right):
+        """Arithmetically bit-shift `left`, `right` places to the right."""
+        return left.as_int() >> (right.as_int() & 0x7fffffff)
+
+    @operator('>>>')
+    def logical_right_shift(self, left, right):
+        """Logically bit-shift `left`, `right` places to the right."""
+        return abs(left.as_int()) >> (right.as_int() & 0x7fffffff)
+
+    @operator('+')
+    def add(self, left, right):
+        """Add `left` to `right`, with JavaScript-compatible coersions."""
+        if (isinstance(left.as_primitive(), basestring) or
+                isinstance(right.as_primitive(), basestring)):
+            # If either value, when coerced to a primitive, is a string,
+            # the operation becomes a string addition operation.
+            return left.as_str() + right.as_str()
+
+        return left.as_float() + right.as_float()
+
+    @operator('-')
+    def sub(self, left, right):
+        """Subtract `left` from `right`."""
+        return left.as_float() - right.as_float()
+
+    @operator('*')
+    def multiply(self, left, right):
+        """Multiply `left` by `right`."""
+        return left.as_float() * right.as_float()
+
+    @operator('/')
+    def divide(self, left, right):
+        """Divide `left` by `right`."""
+        try:
+            return left.as_float() / right.as_float()
+        except ZeroDivisionError:
+            # JavaScript treats this as positive or negative Infinity.
+            return left.as_float() * float('inf')
+
+    @operator('%')
+    def modulo(self, left, right):
+        """Return `left` modulo `right`."""
+        try:
+            return left.as_float() % right.as_float()
+        except ZeroDivisionError:
+            # JavaScript treats this as NaN
+            return float('nan')
+
+    @operator('&')
+    def bin_and(self, left, right):
+        """Coerce both values to integers and return their binary AND."""
+        return left.as_int() & right.as_int()
+
+    @operator('|')
+    def bin_or(self, left, right):
+        """Coerce both values to integers and return their binary OR."""
+        return left.as_int() | right.as_int()
+
+    @operator('^')
+    def bin_xor(self, left, right):
+        """Coerce both values to integers and return their binary XOR."""
+        return left.as_int() ^ right.as_int()
+
+    @operator('in')
+    def in_(self, left, right):
+        """Return true if `right` is an object and contains `left`."""
+        return right.contains(left)
+
+    @operator('instanceof')
+    def instanceof(self, left, right):
+        """Return true if `left` is an instance of `right`."""
+        # FIXME(Kris): Treat instanceof the same as `QueryInterface`
+        return False
+
+
+class UnaryOps(Operators):
+    @operator('-')
+    def minus(self, value):
+        """Coerce value to a number and return its negative."""
+        return -1 * value.as_float()
+
+    @operator('+')
+    def plus(self, value):
+        """Return value coerced to a number."""
+        return value.as_float()
+
+    @operator('!')
+    def not_(self, value):
+        """Coerce value to a boolean and return its inverse."""
+        return not value.as_bool()
+
+    @operator('~')
+    def neg(self, value):
+        """Coerce value to an integer and return its 1's complement inverse."""
+        return ~value.as_int()
+
+    @operator('void')
+    def void(self, value):
+        """Return `undefined`."""
+        return Undefined
+
+    @operator('typeof')
+    def typeof(self, value):
+        """Return the JavaScript type of `value`."""
+        return value.typeof()
+
+    @operator('delete')
+    def delete(self, value):
+        """Do nothing. Unary deletion is no longer supported in JavaScript,
+        except for object keys (which are handled elsewhere)."""
+        return Undefined
 
 
 def _get_member_exp_property(traverser, node):
@@ -370,7 +612,8 @@ def _define_literal(traverser, node):
         return traverser.wrap(dirty=True)
 
     wrapper = traverser.wrap(value)
-    test_literal(traverser, wrapper)
+    if isinstance(value, basestring):
+        test_literal(traverser, wrapper)
     return wrapper
 
 
@@ -379,9 +622,8 @@ def test_literal(traverser, wrapper):
     Test the value of a literal, in particular only a string literal at the
     moment, against possibly dangerous patterns.
     """
-    value = wrapper.get_literal_value()
-    if isinstance(value, basestring):
-        validate_string(value, traverser=traverser, wrapper=wrapper)
+    validate_string(wrapper.as_primitive(), traverser=traverser,
+                    wrapper=wrapper)
 
 
 def _call_expression(traverser, node):
@@ -526,13 +768,14 @@ def _expr_assignment(traverser, node):
     """Evaluate an AssignmentExpression node."""
 
     traverser._debug('ASSIGNMENT_EXPRESSION')
-    traverser.debug_level += 1
 
-    traverser._debug('ASSIGNMENT>>PARSING RIGHT')
-    right = traverser.wrap(traverser._traverse_node(node['right']))
+    with traverser._debug('ASSIGNMENT>>PARSING RIGHT'):
+        right = traverser.wrap(traverser._traverse_node(node['right']))
+
+    operator = node['operator']
 
     # Treat direct assignment different than augmented assignment.
-    if node['operator'] == '=':
+    if operator == '=':
         from predefinedentities import GLOBAL_ENTITIES, is_shared_scope
 
         global_overwrite = False
@@ -606,96 +849,16 @@ def _expr_assignment(traverser, node):
 
         return right
 
-    lit_right = right.get_literal_value()
+    with traverser._debug('ASSIGNMENT>>PARSING LEFT'):
+        left = traverser.wrap(traverser._traverse_node(node['left']))
 
-    traverser._debug('ASSIGNMENT>>PARSING LEFT')
-    left = traverser._traverse_node(node['left'])
-    traverser._debug('ASSIGNMENT>>DONE PARSING LEFT')
-    traverser.debug_level -= 1
+    assert operator[-1] == '='
+    wrapper = _binary_op(operator[:-1], left, right, traverser)
 
-    if isinstance(left, JSWrapper):
-        if left.dirty:
-            return left
+    with traverser._debug('ASSIGNMENT::New value >> %s' % wrapper):
+        left.set_value(wrapper)
 
-        lit_left = left.get_literal_value()
-        token = node['operator']
-
-        # Don't perform an operation on None. Python freaks out
-        if lit_left is None:
-            lit_left = 0
-        if lit_right is None:
-            lit_right = 0
-
-        # All of the assignment operators
-        operators = {
-            '=': lambda: right,
-            '+=': lambda: lit_left + lit_right,
-            '-=': lambda: gleft - gright,
-            '*=': lambda: gleft * gright,
-            '/=': lambda: float('inf') if gright == 0 else gleft / gright,
-            '%=': lambda: float('nan') if gright == 0 else gleft % gright,
-            '<<=': lambda: left.as_int() << right.as_int(),
-            '>>=': lambda: left.as_int() >> right.as_int(),
-            # This is wrong.
-            '>>>=': lambda: abs(left.as_int()) >> right.as_int(),
-            '|=': lambda: left.as_int() | right.as_int(),
-            '^=': lambda: left.as_int() ^ right.as_int(),
-            '&=': lambda: left.as_int() & right.as_int(),
-        }
-
-        # If we're modifying a non-numeric type with a numeric operator, return
-        # NaN.
-        if (not isinstance(lit_left, NUMERIC_TYPES) and
-                token in NUMERIC_OPERATORS):
-            left.set_value(float('nan'))
-            return left
-
-        # If either side of the assignment operator is a string, both sides
-        # need to be casted to strings first.
-        if (isinstance(lit_left, types.StringTypes) or
-                isinstance(lit_right, types.StringTypes)):
-            lit_left = left.as_str()
-            lit_right = right.as_str()
-
-        gleft = left.as_float()
-        gright = right.as_float()
-
-        traverser._debug('ASSIGNMENT>>OPERATION:%s' % token)
-        if token not in operators:
-            # We don't support that operator. (yet?)
-            traverser._debug('ASSIGNMENT>>OPERATOR NOT FOUND', 1)
-            return left
-        elif token in ('<<=', '>>=', '>>>=') and gright < 0:
-            # The user is doing weird bitshifting that will return 0 in JS but
-            # not in Python.
-            left.set_value(0)
-            return left
-        elif (token in ('<<=', '>>=', '>>>=', '|=', '^=', '&=') and
-              (abs(gleft) == float('inf') or abs(gright) == float('inf'))):
-            # Don't bother handling infinity for integer-converted operations.
-            left.set_value(float('nan'))
-            return left
-
-        traverser._debug('ASSIGNMENT::L-value global? (%s)' %
-                         ('Y' if left.hooks else 'N'), 1)
-        try:
-            new_value = operators[token]()
-        except Exception:
-            traverser.system_error(exc_info=sys.exc_info())
-            new_value = None
-
-        # Cap the length of analyzed strings.
-        if (isinstance(new_value, types.StringTypes) and
-                len(new_value) > MAX_STR_SIZE):
-            new_value = new_value[:MAX_STR_SIZE]
-
-        traverser._debug('ASSIGNMENT::New value >> %s' % new_value, 1)
-        left.set_value(new_value)
-        return left
-
-    # Though it would otherwise be a syntax error, we say that 4=5 should
-    # evaluate out to 5.
-    return right
+    return left
 
 
 def _expr_binary(traverser, node):
@@ -736,110 +899,29 @@ def _expr_binary(traverser, node):
 
 def _binary_op(operator, left, right, traverser):
     """Perform a binary operation on two pre-traversed nodes."""
-    # FIXME: Why is all of this logic duplicated for assignment ops?
 
-    # Dirty l or r values mean we can skip the expression. A dirty value
-    # indicates that a lazy operation took place that introduced some
-    # nondeterminacy.
-    # FIXME(Kris): We should process these as if they're strings anyway.
-    if left.dirty:
-        return left
-    elif right.dirty:
-        return right
+    value = traverser.binary_ops[operator](left, right)
 
-    # Binary expressions are only executed on literals.
-    left_wrap = left
-    left = left.as_primitive()
-    right_wrap = right
-    right = right.as_primitive()
+    if isinstance(value, basestring):
+        value = value[:MAX_STR_SIZE]
 
-    # Coerce the literals to numbers for numeric operations.
-    gleft = left_wrap.as_float()
-    gright = right_wrap.as_float()
+    wrapper = traverser.wrap(value, dirty=left.dirty or right.dirty)
+    clean_dirty(wrapper)
 
-    operators = {
-        '==': lambda: left == right or gleft == gright,
-        '!=': lambda: left != right,
-        '===': lambda: left == right,  # Be flexible.
-        '!==': lambda: type(left) != type(right) or left != right,
-        '>': lambda: left > right,
-        '<': lambda: left < right,
-        '<=': lambda: left <= right,
-        '>=': lambda: left >= right,
-        '<<': lambda: left_wrap.as_int() << right_wrap.as_int(),
-        '>>': lambda: left_wrap.as_int() >> right_wrap.as_int(),
-        # This is wrong.
-        '>>>': lambda: abs(left_wrap.as_int()) >> right_wrap.as_int(),
-        '+': lambda: left + right,
-        '-': lambda: gleft - gright,
-        '*': lambda: gleft * gright,
-        '/': lambda: float('inf') if gright == 0 else (gleft / gright),
-        '%': lambda: float('nan') if gright == 0 else (gleft % gright),
-        'in': lambda: right_wrap.contains(left_wrap),
-        # TODO : implement instanceof
-        # FIXME(Kris): Treat instanceof the same as `QueryInterface`
-    }
-
-    output = None
-    if (operator in ('>>', '<<', '>>>') and
-            (left is None or right is None or gright < 0)):
-        output = False
-    elif operator in operators:
-        # Concatenation can be silly, so always turn undefineds into empty
-        # strings and if there are strings, make everything strings.
-        if operator == '+':
-            if isinstance(left, basestring) or isinstance(right, basestring):
-                left = left_wrap.as_str()
-                right = right_wrap.as_str()
-            else:
-                left = gleft
-                right = gright
-
-        # Don't even bother handling infinity if it's a numeric computation.
-        if (operator in ('<<', '>>', '>>>') and
-                (abs(gleft) == float('inf') or abs(gright) == float('inf'))):
-            return traverser.wrap(float('nan'))
-
-        try:
-            output = operators[operator]()
-        except Exception:
-            traverser.system_error(exc_info=sys.exc_info())
-            output = None
-
-        # Cap the length of analyzed strings.
-        if (isinstance(output, types.StringTypes) and
-                len(output) > MAX_STR_SIZE):
-            output = output[:MAX_STR_SIZE]
-
-        wrapper = traverser.wrap(output)
-
-        # Test the newly-created literal for dangerous values.
-        # This may cause duplicate warnings for strings which
-        # already match a dangerous value prior to concatenation.
+    # Test the newly-created literal for dangerous values.
+    # This may cause duplicate warnings for strings which
+    # already match a dangerous value prior to concatenation.
+    if not wrapper.dirty and isinstance(value, basestring):
         test_literal(traverser, wrapper)
 
-        return wrapper
-
-    return traverser.wrap(output)
+    return wrapper
 
 
 def _expr_unary(traverser, node):
     """Evaluate a UnaryExpression node."""
 
-    expr = traverser._traverse_node(node['argument'])
+    operator = node['operator']
+    wrapper = traverser.wrap(traverser._traverse_node(node['argument']))
 
-    operators = {'-': lambda: -1 * expr.as_float(),
-                 '+': lambda: expr.as_float(),
-                 '!': lambda: not expr.as_bool(),
-                 '~': lambda: -1 * (expr.as_int() + 1),
-                 'void': lambda: Undefined,
-                 'typeof': lambda: expr.typeof(),
-                 'delete': lambda: None}  # We never want to empty the context
-    if node['operator'] in operators:
-        output = operators[node['operator']]()
-    else:
-        output = None
-
-    if not isinstance(output, JSWrapper):
-        output = traverser.wrap(output)
-    return output
+    value = traverser.unary_ops[operator](wrapper)
+    return traverser.wrap(value, dirty=wrapper.dirty)

@@ -37,6 +37,9 @@ class Traverser(object):
         self.position = 0  # Column number
         self.context = context
 
+        self.unary_ops = actions.UnaryOps(self)
+        self.binary_ops = actions.BinaryOps(self)
+
         # Can use the `this` object
         self.can_use_this = False
         self.this_stack = []
