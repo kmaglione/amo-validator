@@ -1,5 +1,4 @@
 from collections import defaultdict
-import itertools
 import re
 import sys
 import types
@@ -58,6 +57,8 @@ class Traverser(object):
                 self.debug_level -= 1
         self._debug_level = DebugLevel()
 
+        self._push_context()
+
     def _debug(self, data, indent=0):
         """Write a message to the console if debugging is enabled."""
         if DEBUG:
@@ -86,40 +87,41 @@ class Traverser(object):
 
         self._debug('END>>')
 
-        if self.contexts:
-            # If we're running tests, save a copy of the global context for
-            # inspection.
-            if constants.IN_TESTS:
-                self.err.final_context = self.contexts[0]
+        assert len(self.contexts) == 1
 
-            if self.pollutable:
-                # Ignore anything in the components/ directory
-                if POLLUTION_COMPONENTS_PATH.match(self.filename):
-                    return
+        # If we're running tests, save a copy of the global context for
+        # inspection.
+        if constants.IN_TESTS:
+            self.err.final_context = self.contexts[0]
 
-                # This performs the namespace pollution test.
-                global_context_size = sum(
-                    1 for name in self.contexts[0].data if
-                    name not in POLLUTION_EXCEPTIONS)
-                self._debug('Final context size: %d' % global_context_size)
+        if self.pollutable:
+            # Ignore anything in the components/ directory
+            if POLLUTION_COMPONENTS_PATH.match(self.filename):
+                return
 
-                if (global_context_size > 3 and not self.is_jsm and
-                        'is_jetpack' not in self.err.metadata and
-                        self.err.get_resource('em:bootstrap') != 'true'):
-                    self.err.warning(
-                        err_id=('testcases_javascript_traverser', 'run',
-                                'namespace_pollution'),
-                        warning='JavaScript namespace pollution',
-                        description=(
-                            'Your add-on contains a large number of global '
-                            'variables, which may conflict with other '
-                            'add-ons. For more information, see '
-                            'http://blog.mozilla.com/addons/2009/01/16/'
-                            'firefox-extensions-global-namespace-pollution/'
-                            ', or use JavaScript modules.',
-                            'List of entities: %s'
-                            % ', '.join(self.contexts[0].data.keys())),
-                        filename=self.filename)
+            # This performs the namespace pollution test.
+            global_context_size = sum(
+                1 for name in self.contexts[0].data if
+                name not in POLLUTION_EXCEPTIONS)
+            self._debug('Final context size: %d' % global_context_size)
+
+            if (global_context_size > 3 and not self.is_jsm and
+                    'is_jetpack' not in self.err.metadata and
+                    self.err.get_resource('em:bootstrap') != 'true'):
+                self.err.warning(
+                    err_id=('testcases_javascript_traverser', 'run',
+                            'namespace_pollution'),
+                    warning='JavaScript namespace pollution',
+                    description=(
+                        'Your add-on contains a large number of global '
+                        'variables, which may conflict with other '
+                        'add-ons. For more information, see '
+                        'http://blog.mozilla.com/addons/2009/01/16/'
+                        'firefox-extensions-global-namespace-pollution/'
+                        ', or use JavaScript modules.',
+                        'List of entities: %s'
+                        % ', '.join(self.contexts[0].data.keys())),
+                    filename=self.filename)
 
     def wrap(self, value=Sentinel, **kw):
         """Wraps the given value in a JSWrapper and JSValue, as appropriate,
@@ -235,15 +237,12 @@ class Traverser(object):
     def _pop_context(self):
         'Adds a variable context to the current interpretation frame'
 
-        # Keep the global scope on the stack.
-        if len(self.contexts) == 1:
-            self._debug('CONTEXT>>ROOT POP ABORTED')
-            return
+        assert len(self.contexts) > 1
         popped_context = self.contexts.pop()
 
         self.debug_level -= 1
-        self._debug('POP_CONTEXT>>%d' % len(self.contexts))
-        self._debug(popped_context)
+        self._debug('POP_CONTEXT>>%d %r' % (len(self.contexts),
+                                            popped_context))
 
     def _peek_context(self, depth=1):
         """Returns the most recent context. Note that this should NOT be used
@@ -331,14 +330,10 @@ class Traverser(object):
     def _declare_variable(self, name, value, type_='var'):
         context = None
         if type_ in ('var', 'const', ):
-            # Same as `reversed(self.contexts[1:])`
-            for cont in itertools.islice(reversed(self.contexts), None,
-                                         len(self.contexts)):
-                if cont.type_ == 'default':
-                    context = cont
+            for ctxt in reversed(self.contexts):
+                if ctxt.context_type == 'default':
+                    context = ctxt
                     break
-            else:
-                context = self.contexts[0]
         elif type_ == 'let':
             context = self.contexts[-1]
         elif type_ == 'glob':

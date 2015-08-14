@@ -140,13 +140,15 @@ class JSObject(JSValue):
     def __init__(self, data=None, **kw):
         super(JSObject, self).__init__(**kw)
 
-        self.type_ = 'object'  # For use when an object is pushed as a context.
         self.data = {}
         if data is not None:
             self.data.update(data)
 
-    is_unwrapped = False
+    # An ordinary JSObject will act as a JSContext when used in `with`
+    # statements.
+    context_type = 'object'
     recursing = False
+    is_unwrapped = False
 
     @property
     def _value(self):
@@ -263,11 +265,11 @@ class JSObject(JSValue):
 
 
 class JSContext(JSObject):
-    """A variable context"""
+    """A scope context to hold local and global variables."""
 
-    def __init__(self, context_type, **kw):
+    def __init__(self, context_type='default', **kw):
         super(JSContext, self).__init__(**kw)
-        self.type_ = context_type
+        self.context_type = context_type
 
 
 class JSWrapper(object):

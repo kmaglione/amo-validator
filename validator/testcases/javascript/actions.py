@@ -373,45 +373,48 @@ def _function(traverser, node):
     # Oh? How is that, exactly?
 
     def wrap(traverser, node):
-        me = JSObject(traverser=traverser)
 
         traverser.function_collection.append([])
 
         # Replace the current context with a prototypeable JS object.
-        traverser._pop_context()
-        me.type_ = 'default'  # Treat the function as a normal object.
-        traverser._push_context(me)
+        context = JSContext('default', traverser=traverser)
+        traverser._push_context(context)
+
         traverser._debug('THIS_PUSH')
-        traverser.this_stack.append(me)  # Allow references to "this"
+        # Huh what? That is not how `this` works at all.
+        traverser.this_stack.append(context)  # Allow references to "this"
 
-        # Declare parameters in the local scope
-        params = []
-        for param in node['params']:
-            if param['type'] == 'Identifier':
-                params.append(param['name'])
-            elif param['type'] == 'ArrayPattern':
-                for element in param['elements']:
-                    # Array destructuring in function prototypes? LOL!
-                    if element is None or element['type'] != 'Identifier':
-                        continue
-                    params.append(element['name'])
+        try:
+            # Declare parameters in the local scope
+            params = []
+            for param in node['params']:
+                if param['type'] == 'Identifier':
+                    params.append(param['name'])
+                elif param['type'] == 'ArrayPattern':
+                    for element in param['elements']:
+                        # Array destructuring in function prototypes? LOL!
+                        if element is None or element['type'] != 'Identifier':
+                            continue
+                        params.append(element['name'])
 
-        local_context = traverser._peek_context(1)
-        for param in params:
-            var = traverser.wrap(dirty=True)
+            local_context = traverser._peek_context(1)
+            for param in params:
+                var = traverser.wrap(dirty=True)
 
-            # We can assume that the params are static because we don't care
-            # about what calls the function. We want to know whether the
-            # function solely returns static values. If so, it is a static
-            # function.
-            local_context.set(param, var)
+                # We can assume that the params are static because we don't
+                # care about what calls the function. We want to know whether
+                # the function solely returns static values. If so, it is a
+                # static function.
+                local_context.set(param, var)
 
-        traverser.traverse(node['body'])
+            traverser.traverse(node['body'])
 
-        # Since we need to manually manage the "this" stack, pop off that
-        # context.
-        traverser._debug('THIS_POP')
-        traverser.this_stack.pop()
+        finally:
+            # Since we need to manually manage the "this" stack, pop off that
+            # context.
+            traverser.this_stack.pop()
+            traverser._debug('THIS_POP')
+            traverser._pop_context()
 
         # Call all of the function collection's members to traverse all of the
         # child functions.
