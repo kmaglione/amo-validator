@@ -131,10 +131,6 @@ class Traverser(object):
 
         return JSWrapper(value, traverser=self, **kw)
 
-    def _traverse_node(self, node):
-        # Deprecated wrapper.
-        return self.traverse(node)
-
     def traverse(self, node, source=None):
         if node is None:
             return self.wrap(dirty=True)
@@ -298,34 +294,35 @@ class Traverser(object):
     def _build_global(self, name, entity):
         'Builds an object based on an entity from the predefined entity list'
 
-        if (not callable(entity.get('dangerous')) or
-                'dangerous_on_read' in entity):
-            dang = entity.get('dangerous', entity.get('dangerous_on_read'))
-
-            if callable(dang):
-                dang = dang(self.traverse, self.err)
-
-            if dang:
-                kwargs = dict(
-                    err_id=('js', 'traverser', 'dangerous_global'),
-                    warning='Access to the `%s` global' % name,
-                    description='Access to the `%s` property is '
-                                'deprecated for security or '
-                                'other reasons.' % name)
-
-                if isinstance(dang, DESCRIPTION_TYPES):
-                    kwargs['description'] = dang
-                elif isinstance(dang, dict):
-                    kwargs.update(dang)
-
-                self._debug('DANGEROUS')
-                self.warning(**kwargs)
-
         entity.setdefault('name', name)
 
         # Build out the wrapper object from the global definition.
         result = self.wrap(hooks=entity)
         result = actions._expand_globals(self, result)
+
+        if 'dangerous' in entity and not callable(entity['dangerous']):
+            # If it's callable, it will be processed later.
+            dangerous = entity['dangerous']
+        else:
+            dangerous = entity.get('dangerous_on_read')
+            if callable(dangerous):
+                dangerous = dangerous(result)
+
+        if dangerous:
+            kwargs = dict(
+                err_id=('js', 'traverser', 'dangerous_global'),
+                warning='Access to the `%s` global' % name,
+                description='Access to the `%s` property is '
+                            'deprecated for security or '
+                            'other reasons.' % name)
+
+            if isinstance(dangerous, DESCRIPTION_TYPES):
+                kwargs['description'] = dangerous
+            elif isinstance(dangerous, dict):
+                kwargs.update(dangerous)
+
+            self._debug('DANGEROUS')
+            self.warning(**kwargs)
 
         self._debug('BUILT_GLOBAL')
 

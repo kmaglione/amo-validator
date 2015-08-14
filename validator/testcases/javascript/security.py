@@ -47,12 +47,8 @@ hook_interface(('nsIProtocolProxyService', 'registerFilter'),
 
 # Modules.
 
-def check_import(a, t, e):
+def check_import(this, args, callee):
     """Check Components.utils.import statements for dangerous modules."""
-
-    traverser = t.im_self
-    traverse_node = t
-    args = map(traverse_node, a)
 
     if len(args) > 0:
         module = args[0].as_str()
@@ -64,7 +60,7 @@ def check_import(a, t, e):
                 {'err_id': ('testcases_javascript', 'security', 'jsm_import'),
                  'warning': 'Potentially dangerous JSM imported.'},
                 DANGEROUS_MODULES[module])
-            traverser.warning(**kw)
+            this.traverser.warning(**kw)
 
 hook_global((u'Components', u'utils', u'import'),
             dangerous=check_import)
@@ -95,17 +91,16 @@ LOW_LEVEL_SDK_MODULES = {
 }
 
 
-def check_require(a, t, e):
+def check_require(this, args, callee):
     """
     Tests for unsafe uses of `require()` in SDK add-ons.
     """
 
-    args, traverse, err = a, t, e
-
+    err = this.traverser.err
     if not err.metadata.get('is_jetpack') and len(args):
         return
 
-    module = traverse(args[0]).get_literal_value()
+    module = args[0].as_primitive()
     if not isinstance(module, basestring):
         return
 
@@ -282,9 +277,9 @@ REGISTRY_WRITE = {'dangerous': {
 
 def registry_key(write=False):
     """Represents a function which returns a registry key object."""
-    res = {'return': lambda wrapper, arguments, traverser: (
+    res = {'return': lambda this, args, callee: (
         build_quick_xpcom('createInstance', 'nsIWindowMediator',
-                          traverser, wrapper=True))}
+                          this.traverser, wrapper=True))}
     if write:
         res.update(REGISTRY_WRITE)
 

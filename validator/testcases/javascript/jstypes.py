@@ -196,7 +196,7 @@ class JSObject(JSValue):
 
         modifier = instanceproperties.get_operation('get', name)
         if modifier:
-            modifier(self.traverser)
+            modifier(self, name)
 
         if output is None:
             return self.traverser.wrap(dirty=True)
@@ -213,7 +213,7 @@ class JSObject(JSValue):
     def set(self, name, value):
         modifier = instanceproperties.get_operation('set', name)
         if modifier:
-            modified_value = modifier(value, self.traverser)
+            modified_value = modifier(self, name, value)
             if modified_value is not None:
                 value = modified_value
 
@@ -364,7 +364,8 @@ class JSWrapper(object):
 
             # Process any setter/modifier
             if self.setter:
-                value = self.setter(value, traverser) or value or None
+                value = (self.setter(self, None, traverser.wrap(value)) or
+                         value or None)
 
             # We want to obey the permissions of global objects
             from predefinedentities import is_shared_scope
@@ -429,7 +430,7 @@ class JSWrapper(object):
 
             def _evaluate_lambdas(node):
                 if callable(node):
-                    return _evaluate_lambdas(node(t=traverser))
+                    return _evaluate_lambdas(node(traverser))
                 else:
                     return node
 

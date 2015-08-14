@@ -60,8 +60,8 @@ COMPAT_REGEXPS.append(
 )
 
 
-def fuel_error(traverse_node, err):
-    traverse_node.im_self.warning(
+def fuel_error(this):
+    this.traverser.warning(
         err_id=('js', 'traverser', 'dangerous_global'),
         warning='The FUEL library is now deprecated.',
         description='The FUEL library is now deprecated. You should use the '

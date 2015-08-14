@@ -277,7 +277,7 @@ def _expand_globals(traverser, node):
     """Expands a global object that has a lambda value."""
 
     if callable(node.hooks.get('value')):
-        result = node.hooks['value'](traverser)
+        result = node.hooks['value'](node)
 
         if isinstance(result, dict):
             output = traverser._build_global('--', result)
@@ -346,6 +346,7 @@ def trace_member(traverser, node, instantiate=False):
             output = traverser._seek_variable(node['name'])
 
         return _expand_globals(traverser, output)
+
     else:
         traverser._debug('MEMBER_EXP>>ROOT:EXPRESSION')
         # It's an expression, so just try your damndest.
@@ -626,11 +627,16 @@ def test_literal(traverser, wrapper):
 
 
 def _call_expression(traverser, node):
-    args = node['arguments']
-    for arg in args:
-        traverser.traverse(arg, source='arguments')
+    args = [traverser.traverse(arg, source='arguments')
+            for arg in node['arguments']]
 
+    result = None
     member = traverser.traverse(node['callee'])
+
+    if 'object' in node['callee']:
+        this = trace_member(traverser, node['callee']['object'])
+    else:
+        this = traverser.wrap(None)
 
     if (traverser.filename.startswith('defaults/preferences/') and
         ('name' not in node['callee'] or
@@ -649,9 +655,8 @@ def _call_expression(traverser, node):
             column=traverser.position,
             context=traverser.context)
 
-    if callable(member.hooks.get('dangerous', None)):
-        result = member.hooks['dangerous'](a=args, t=traverser.traverse,
-                                           e=traverser.err)
+    if callable(member.hooks.get('dangerous')):
+        result = member.hooks['dangerous'](this, args, callee=member)
         name = member.hooks.get('name', '')
 
         if result and name:
@@ -672,8 +677,8 @@ def _call_expression(traverser, node):
 
             traverser.warning(**kwargs)
 
-    elif (node['callee']['type'] == 'MemberExpression' and
-          node['callee']['property']['type'] == 'Identifier'):
+    if (node['callee']['type'] == 'MemberExpression' and
+            node['callee']['property']['type'] == 'Identifier'):
 
         # If we can identify the function being called on any member of any
         # instance, we can use that to either generate an output value or test
@@ -681,22 +686,22 @@ def _call_expression(traverser, node):
         identifier_name = node['callee']['property']['name']
         if identifier_name in instanceactions.INSTANCE_DEFINITIONS:
             result = instanceactions.INSTANCE_DEFINITIONS[identifier_name](
-                        args, traverser, node, wrapper=member)
-            return result
+                this, args, callee=member)
 
     if 'return' in member.hooks:
         if 'object' in node['callee']:
-            member.parent = trace_member(traverser, node['callee']['object'])
+            member.parent = this
+        result = member.hooks['return'](this, args, callee=member)
 
-        return member.hooks['return'](wrapper=member, arguments=args,
-                                      traverser=traverser)
+    if result is not None:
+        return traverser.wrap(result)
 
     return traverser.wrap(dirty=True)
 
 
-def _readonly_top(traverser, right, node_right):
+def _readonly_top(left, right):
     """Handle the readonly callback for window.top."""
-    traverser.notice(
+    left.traverser.notice(
         err_id=('testcases_javascript_actions',
                 '_readonly_top'),
         notice='window.top is a reserved variable',
@@ -794,24 +799,26 @@ def _expr_assignment(traverser, node):
                 if 'readonly' in global_dict:
                     readonly_value = global_dict['readonly']
 
-            traverser._declare_variable(node_left['name'], right, type_='glob')
-        elif node_left['type'] == 'MemberExpression':
-            member_obj = trace_member(traverser, node_left['object'],
-                                      instantiate=True)
+            left = traverser._declare_variable(node_left['name'],
+                                               right, type_='glob')
 
-            global_overwrite = (member_obj.hooks and
-                                not member_obj.hooks.get('overwritable'))
+        elif node_left['type'] == 'MemberExpression':
+            left = trace_member(traverser, node_left['object'],
+                                instantiate=True)
+
+            global_overwrite = (left.hooks and
+                                not left.hooks.get('overwritable'))
 
             member_property = _get_member_exp_property(traverser, node_left)
             traverser._debug('ASSIGNMENT:MEMBER_PROPERTY(%s)'
                              % member_property)
             traverser._debug('ASSIGNMENT:GLOB_OV::%s' % global_overwrite)
 
-            if isinstance(member_obj.value, JSObject):
-                member_obj.value.set(member_property, right)
+            if isinstance(left.value, JSObject):
+                left.value.set(member_property, right)
 
-            if 'value' in member_obj.hooks:
-                hooks = _expand_globals(traverser, member_obj).hooks
+            if 'value' in left.hooks:
+                hooks = _expand_globals(traverser, left).hooks
 
                 value_hook = hooks['value'].get(member_property)
                 if value_hook:
@@ -820,6 +827,9 @@ def _expr_assignment(traverser, node):
                     if 'readonly' in value_hook:
                         global_overwrite = True
                         readonly_value = value_hook['readonly']
+        else:
+            with traverser._debug('ASSIGNMENT>>PARSING LEFT'):
+                left = traverser.traverse(node['left'])
 
         traverser._debug('ASSIGNMENT:DIRECT:GLOB_OVERWRITE %s' %
                          global_overwrite)
@@ -827,7 +837,7 @@ def _expr_assignment(traverser, node):
                          readonly_value)
 
         if callable(readonly_value):
-            readonly_value = readonly_value(traverser, right, node['right'])
+            readonly_value = readonly_value(left, right)
 
         if readonly_value and global_overwrite:
 

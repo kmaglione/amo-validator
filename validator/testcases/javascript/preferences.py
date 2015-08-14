@@ -123,16 +123,15 @@ def validate_pref(*args, **kw):
 
 # Preference APIs.
 
-def create_preference_branch(arguments, traverser, node, wrapper):
+def create_preference_branch(this, args, callee):
     """Creates a preference branch, which can be used for testing composed
     preference names."""
 
-    if arguments:
-        arg = traverser._traverse_node(arguments[0])
-        if arg.is_literal():
+    if args:
+        if args[0].is_literal():
             res = build_quick_xpcom('createInstance', 'nsIPrefBranch',
-                                    traverser, wrapper=True)
-            res.hooks['preference_branch'] = arg.as_str()
+                                    this.traverser, wrapper=True)
+            res.hooks['preference_branch'] = args[0].as_str()
             return res
 
 
@@ -156,31 +155,30 @@ def drop_pref_messages(wrapper):
                 traverser.err.drop_message(msg)
 
 
-def get_preference(wrapper, arguments, traverser):
+def get_preference(this, args, callee):
     """Tests get preference calls, and removes preference write warnings
     when they are not necessary."""
 
-    if len(arguments) >= 1:
-        arg = traverser._traverse_node(arguments[0])
-        if arg.is_clean_literal():
-            drop_pref_messages(arg)
+    if len(args) >= 1:
+        if args[0].is_clean_literal():
+            drop_pref_messages(args[0])
 
 
-def set_preference(wrapper, arguments, traverser):
+def set_preference(this, args, callee):
     """Tests set preference calls for non-root preferences branches against
     dangerous values."""
 
-    if len(arguments) < 1:
+    if len(args) < 1:
         return
 
-    parent = getattr(wrapper, 'parent', None)
-    arg = traverser._traverse_node(arguments[0])
+    arg = args[0]
     if arg.is_literal():
+        parent = getattr(callee, 'parent', this)
         pref = arg.as_str()
 
         # If we're being called on a preference branch other than the root,
         # prepend its branch name to the passed preference name.
-        branch = parent and parent.hooks.get('preference_branch')
+        branch = parent.hooks.get('preference_branch')
         if branch:
             pref = branch + pref
         elif arg.is_clean_literal():
@@ -190,27 +188,19 @@ def set_preference(wrapper, arguments, traverser):
                          '_call_expression', 'called_set_preference'),
               'warning': 'Attempt to set a dangerous preference'}
 
-        validate_pref(pref, traverser=traverser, extra=kw, wrapper=arg)
+        validate_pref(pref, traverser=this.traverser, extra=kw, wrapper=arg)
 
 
-def call_pref(a, t, e):
+def call_pref(this, args, callee):
     """
     Handler for pref() and user_pref() calls in defaults/preferences/*.js files
     to ensure that they don't touch preferences outside of the "extensions."
     branch.
     """
 
-    # We really need to clean up the arguments passed to these functions.
-    traverser = t.im_self
-    args = a
-
-    if not traverser.filename.startswith('defaults/preferences/') or not args:
-        return
-
-    set_preference(traverser.wrap(None), args, traverser)
-
-    value = traverser._traverse_node(args[0]).as_str()
-    return test_preference(value)
+    if this.traverser.filename.startswith('defaults/preferences/') and args:
+        set_preference(this, args, callee)
+        return test_preference(args[0].as_str())
 
 
 def test_preference(value):

@@ -13,15 +13,14 @@ SYNCHRONOUS_SQL_DESCRIPTION = (
     'such as JSON files or IndexedDB.')
 
 
-def _check_dynamic_sql(args, traverser, node=None, wrapper=None):
+def _check_dynamic_sql(this, args, callee):
     """
     Check for the use of non-static strings when creating/exeucting SQL
     statements.
     """
 
-    simple_args = map(traverser._traverse_node, args)
-    if len(args) >= 1 and not simple_args[0].is_clean_literal():
-        traverser.warning(
+    if len(args) >= 1 and not args[0].is_clean_literal():
+        this.traverser.warning(
             err_id=('js', 'instanceactions', 'executeSimpleSQL_dynamic'),
             warning='SQL statements should be static strings',
             description=('Dynamic SQL statement should be constucted via '
@@ -33,24 +32,24 @@ def _check_dynamic_sql(args, traverser, node=None, wrapper=None):
                          '/Storage#Binding_parameters)'))
 
 
-def createStatement(args, traverser, node, wrapper):
+def createStatement(this, args, callee):
     """
     Handle calls to `createStatement`, returning an object which emits
     warnings upon calls to `execute` and `executeStep` rather than
     `executeAsync`.
     """
-    _check_dynamic_sql(args, traverser)
+    _check_dynamic_sql(this, args, callee)
     return build_quick_xpcom('createInstance', 'mozIStorageBaseStatement',
-                             traverser, wrapper=True)
+                             this.traverser, wrapper=True)
 
 
-def executeSimpleSQL(args, traverser, node, wrapper):
+def executeSimpleSQL(this, args, callee):
     """
     Handle calls to `executeSimpleSQL`, warning that asynchronous methods
     should be used instead.
     """
-    _check_dynamic_sql(args, traverser)
-    traverser.warning(
+    _check_dynamic_sql(this, args, callee)
+    this.traverser.warning(
         err_id=('js', 'instanceactions', 'executeSimpleSQL'),
         warning='Synchronous SQL should not be used',
         description=SYNCHRONOUS_SQL_DESCRIPTION)
@@ -70,11 +69,10 @@ hook_interface(('mozIStorageBaseStatement', 'executeStep'),
 
 # XMLHttpRequest.
 
-def xhr_open(a, t, e):
+def xhr_open(this, args, callee):
     """Check that XMLHttpRequest.open is not called synchronously."""
 
-    args = map(t, a)
-    if len(args) >= 3 and not args[2].get_literal_value():
+    if len(args) >= 3 and not args[2].as_bool():
         return ('Synchronous HTTP requests can cause serious UI '
                 'performance problems, especially for users with '
                 'slow network connections.')

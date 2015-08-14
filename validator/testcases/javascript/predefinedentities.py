@@ -1,5 +1,5 @@
-from functools import partial
 import math
+from functools import partial
 
 from validator.decorator import post_init
 from .call_definitions import python_wrap, xpcom_constructor
@@ -24,6 +24,9 @@ def is_shared_scope(traverser, right=None, node_right=None):
     a shared scope, such as a browser window. Particularly used for
     detecting when global overwrite warnings should be issued."""
 
+    if isinstance(traverser, JSWrapper):
+        # Temporary hack.
+        traverser = traverser.traverser
     # FIXME(Kris): This is not a great heuristic.
     return not (traverser.is_jsm or
                 traverser.err.get_resource('em:bootstrap') == 'true')
@@ -48,6 +51,10 @@ CONTRACT_ENTITIES = {}
 
 def build_quick_xpcom(method, interface, traverser, wrapper=False):
     """A shortcut to quickly build XPCOM objects on the fly."""
+    if isinstance(traverser, JSWrapper):
+        # Temporary hack.
+        traverser = traverser.traverser
+
     extra = ()
     if isinstance(interface, (list, tuple)):
         interface, extra = interface[0], interface[1:]
@@ -58,8 +65,8 @@ def build_quick_xpcom(method, interface, traverser, wrapper=False):
             entity={'xpcom_map':
                 lambda: INTERFACES.get(iface, INTERFACES['nsISupports'])})
 
-    constructor = xpcom_constructor(method, pretraversed=True)
-    obj = constructor(None, [interface_obj(interface)], traverser)
+    constructor = xpcom_constructor(method)
+    obj = constructor(traverser.wrap(), [interface_obj(interface)], traverser)
 
     for iface in extra:
         # `xpcom_constructor` really needs to be cleaned up so we can avoid
@@ -121,21 +128,21 @@ SERVICES = {
     'ww': 'nsIWindowWatcher',
 }
 
-CONTENT_DOCUMENT = {'value': lambda t: GLOBAL_ENTITIES[u'document']}
+CONTENT_DOCUMENT = {'value': lambda traverser: GLOBAL_ENTITIES[u'document']}
 
 # GLOBAL_ENTITIES is also representative of the `window` object.
 GLOBAL_ENTITIES = {
-    u'window': {'value': lambda t: {'value': GLOBAL_ENTITIES}},
-    u'null': {'literal': lambda t: JSWrapper(None, traverser=t)},
+    u'window': {'value': lambda this: {'value': GLOBAL_ENTITIES}},
+    u'null': {'literal': lambda traverser: traverser.wrap(None)},
     u'Cc': {'readonly': False,
-            'value':
-                lambda t: GLOBAL_ENTITIES['Components']['value']['classes']},
+            'value': lambda this: (
+                GLOBAL_ENTITIES['Components']['value']['classes'])},
     u'Ci': {'readonly': False,
-            'value':
-                lambda t: GLOBAL_ENTITIES['Components']['value']['interfaces']},
+            'value': lambda this: (
+                GLOBAL_ENTITIES['Components']['value']['interfaces'])},
     u'Cu': {'readonly': False,
-            'value':
-                lambda t: GLOBAL_ENTITIES['Components']['value']['utils']},
+            'value': lambda this: (
+                GLOBAL_ENTITIES['Components']['value']['utils'])},
 
     # From Services.jsm.
     u'Services': {'value': SERVICES},
@@ -146,12 +153,12 @@ GLOBAL_ENTITIES = {
                   {'overwriteable': True,
                    'readonly': False},
               u'defaultView':
-                  {'value': lambda t: {'value': GLOBAL_ENTITIES}},
+                  {'value': lambda this: {'value': GLOBAL_ENTITIES}},
               u'loadOverlay':
                   {'dangerous':
-                       lambda a, t, e:
-                           not a or not t(a[0]).as_str().lower()
-                               .startswith(('chrome:', 'resource:'))}}},
+                       lambda this, args, callee:
+                           not (args and args[0].as_str().lower()
+                                .startswith(('chrome:', 'resource:')))}}},
 
     u'encodeURI': {'readonly': True},
     u'decodeURI': {'readonly': True},
@@ -168,7 +175,7 @@ GLOBAL_ENTITIES = {
         {'value':
              {u'prototype': {'readonly': is_shared_scope},
               u'constructor':  # Just an experiment for now
-                  {'value': lambda t: GLOBAL_ENTITIES['Function']}}},
+                  {'value': lambda this: GLOBAL_ENTITIES['Function']}}},
     u'String':
         {'value':
              {u'prototype': {'readonly': is_shared_scope}},
@@ -182,9 +189,9 @@ GLOBAL_ENTITIES = {
              {u'prototype':
                   {'readonly': is_shared_scope},
               u'POSITIVE_INFINITY':
-                  {'value': lambda t: JSWrapper(float('inf'), traverser=t)},
+                  {'value': lambda this: this.traverser.wrap(float('inf'))},
               u'NEGATIVE_INFINITY':
-                  {'value': lambda t: JSWrapper(float('-inf'), traverser=t)}},
+                  {'value': lambda this: this.traverser.wrap(float('-inf'))}},
          'return': call_definitions.number_global},
     u'Boolean':
         {'value':
@@ -197,23 +204,23 @@ GLOBAL_ENTITIES = {
     u'Math':
         {'value':
              {u'PI':
-                  {'value': lambda t: JSWrapper(math.pi, traverser=t)},
+                  {'value': lambda this: this.traverser.wrap(math.pi)},
               u'E':
-                  {'value': lambda t: JSWrapper(math.e, traverser=t)},
+                  {'value': lambda this: this.traverser.wrap(math.e)},
               u'LN2':
-                  {'value': lambda t: JSWrapper(math.log(2), traverser=t)},
+                  {'value': lambda this: this.traverser.wrap(math.log(2))},
               u'LN10':
-                  {'value': lambda t: JSWrapper(math.log(10), traverser=t)},
+                  {'value': lambda this: this.traverser.wrap(math.log(10))},
               u'LOG2E':
-                  {'value': lambda t: JSWrapper(math.log(math.e, 2),
-                                                traverser=t)},
+                  {'value': lambda this: this.traverser.wrap(
+                      math.log(math.e, 2))},
               u'LOG10E':
-                  {'value': lambda t: JSWrapper(math.log10(math.e),
-                                                traverser=t)},
+                  {'value': lambda this: this.traverser.wrap(
+                      math.log10(math.e))},
               u'SQRT2':
-                  {'value': lambda t: JSWrapper(math.sqrt(2), traverser=t)},
+                  {'value': lambda this: this.traverser.wrap(math.sqrt(2))},
               u'SQRT1_2':
-                  {'value': lambda t: JSWrapper(math.sqrt(1/2), traverser=t)},
+                  {'value': lambda this: this.traverser.wrap(math.sqrt(1/2))},
               u'abs':
                   {'return': python_wrap(abs, [('num', 0)])},
               u'acos':
@@ -260,7 +267,7 @@ GLOBAL_ENTITIES = {
 
     u'Components':
         {'dangerous_on_read':
-             lambda t, e: bool(e.metadata.get('is_jetpack')),
+             lambda this: bool(this.traverser.err.metadata.get('is_jetpack')),
          'value':
              {u'classes':
                   {'xpcom_wildcard': True,
@@ -271,11 +278,12 @@ GLOBAL_ENTITIES = {
                            {'return': xpcom_constructor('getService')}}},
               u'interfaces': {'value': INTERFACE_ENTITIES}}},
 
-    # Global properties are inherently read-only, though this formalizes it.
     u'Infinity':
-        {'value': lambda t: JSWrapper(float('inf'), traverser=t)},
-    u'NaN': {'readonly': True, 'literal': lambda t: float('nan')},
-    u'undefined': {'readonly': True, 'literal': lambda t: Undefined},
+        {'literal': lambda traverser: float('inf')},
+    u'NaN': {'readonly': True,
+             'literal': lambda traverser: float('nan')},
+    u'undefined': {'readonly': True,
+                   'literal': lambda traverser: Undefined},
 
     u'innerHeight': {'readonly': False},
     u'innerWidth': {'readonly': False},
@@ -288,20 +296,20 @@ GLOBAL_ENTITIES = {
              {u'document': CONTENT_DOCUMENT}},
     u'contentWindow':
         {'value':
-             lambda t: {'value': GLOBAL_ENTITIES}},
-    u'_content': {'value': lambda t: GLOBAL_ENTITIES[u'content']},
+             lambda traverser: {'value': GLOBAL_ENTITIES}},
+    u'_content': {'value': lambda this: GLOBAL_ENTITIES[u'content']},
     u'gBrowser':
         {'value':
              {u'contentDocument':
                   {'value': CONTENT_DOCUMENT},
               u'contentWindow':
                   {'value':
-                       lambda t: {'value': GLOBAL_ENTITIES}},
+                       lambda this: {'value': GLOBAL_ENTITIES}},
               u'selectedTab':
                   {'readonly': False}}},
     u'opener':
         {'value':
-             lambda t: {'value': GLOBAL_ENTITIES}},
+             lambda this: {'value': GLOBAL_ENTITIES}},
 }
 
 

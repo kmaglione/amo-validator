@@ -331,7 +331,7 @@ class ErrorBundle(object):
             if not self.supports_version(message['for_appversions']):
                 if self.instant:
                     print '(Instant error discarded)'
-                    self._print_message(type_, message, verbose=True)
+                    self._print_message(type_ + ': ', message, verbose=True)
                 return
         elif self.version_requirements:
             # If there was no for_appversions but there were version
@@ -369,7 +369,7 @@ class ErrorBundle(object):
 
         # If instant mode is turned on, output the message immediately.
         if self.instant:
-            self._print_message(type_, message, verbose=True)
+            self._print_message(type_ + ': ', message, verbose=True)
 
     def failed(self, fail_on_warnings=True):
         """Returns a boolean value describing whether the validation
@@ -555,7 +555,7 @@ class ErrorBundle(object):
         'Prints a message and takes care of all sorts of nasty code'
 
         # Load up the standard output.
-        output = ['\n', prefix, ': ', message['message']]
+        output = ['\n', prefix, message['message']]
 
         # We have some extra stuff for verbose mode.
         if verbose:

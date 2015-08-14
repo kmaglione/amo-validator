@@ -5,15 +5,15 @@ from .predefinedentities import INTERFACES, hook_global, hook_interface
 
 
 def if_bootstrapped(msg):
-    def dangerous(a, t, e):
-        if e.get_resource('em:bootstrap'):
+    def dangerous(this, args, callee):
+        if this.traverser.err.get_resource('em:bootstrap'):
             return msg
     return dangerous
 
 
 def if_jetpack(msg):
-    def dangerous(a, t, e):
-        if e.metadata.get('is_jetpack'):
+    def dangerous(this, args, callee):
+        if this.traverser.err.metadata.get('is_jetpack'):
             return msg
     return dangerous
 
@@ -41,10 +41,9 @@ hook_interface(('nsIObserverService', 'addObserver'),
                    'at shutdown.'))
 
 
-def setSubstitution(a, t, e):
-    if e.get_resource('em:bootstrap'):
-        args = map(t, a)
-        if len(args) > 1 and args[1].get_literal_value():
+def setSubstitution(this, args, callee):
+    if this.traverser.err.get_resource('em:bootstrap'):
+        if len(args) > 1 and args[1].as_bool():
             return ('Authors of bootstrapped add-ons must take care '
                     'to clean up any added resource substitutions '
                     'at shutdown.')
@@ -78,9 +77,8 @@ hook_interface(('nsIWindowWatcher', 'addListener'),
                    'to remove any added observers at shutdown.'))
 
 
-def addCategoryEntry(a, t, e):
-    if e.get_resource('em:bootstrap'):
-        args = map(t, a)
+def addCategoryEntry(this, args, callee):
+    if this.traverser.err.get_resource('em:bootstrap'):
         if len(args) > 3 and args[3].as_bool():
             return ('Bootstrapped add-ons may not create persistent category '
                     'entries.')

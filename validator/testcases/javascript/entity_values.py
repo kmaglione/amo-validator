@@ -5,8 +5,8 @@ from .predefinedentities import hook_global, hook_interface
 def register_entity(name):
     """Allow an entity's modifier to be registered for use."""
     def wrap(func):
-        def return_wrap(t):
-            output = func(traverser=t)
+        def return_wrap(this):
+            output = func(this.traverser)
 
             if output is not None:
                 return output
@@ -48,24 +48,22 @@ def register_changed_entities(version_definition, entities, version_string):
 
 @register_entity('nsIWindowWatcher.openWindow')
 def nsIWindowWatcher_openWindow(traverser):
-    def on_open(wrapper, arguments, traverser):
-        if not arguments:
+    def on_open(this, args, callee):
+        if not args:
             return
-        uri = traverser._traverse_node(arguments[0])
-
         from call_definitions import open_in_chrome_context
-        open_in_chrome_context(uri, 'nsIWindowWatcher.openWindow', traverser)
+        open_in_chrome_context(args[0], 'nsIWindowWatcher.openWindow',
+                               traverser)
 
     return {'return': on_open}
 
 
 @register_entity('nsITransferable.init')
 def nsITransferable_init(traverser):
-    def on_init(wrapper, arguments, traverser):
-        if not arguments:
+    def on_init(this, args, callee):
+        if not args:
             return
-        first_arg = traverser._traverse_node(arguments[0])
-        if first_arg.get_literal_value():
+        if args[0].as_primitive():
             return
         traverser.warning(
             err_id=('js_entity_values', 'nsITransferable', 'init'),

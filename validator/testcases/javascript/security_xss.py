@@ -2,7 +2,6 @@
 escaping, and so forth."""
 
 import re
-from functools import partial
 
 from validator.constants import EVENT_ASSIGNMENT
 from ..regex.generic import FILE_REGEXPS
@@ -139,7 +138,7 @@ def set_HTML(function, new_value, traverser):
                         'degradation.' % function)
 
 
-def insertAdjacentHTML(args, traverser, node, wrapper):
+def insertAdjacentHTML(this, args, callee):
     """
     Perfrom the same tests on content inserted into the DOM via
     insertAdjacentHTML as we otherwise would for content inserted via the
@@ -148,8 +147,7 @@ def insertAdjacentHTML(args, traverser, node, wrapper):
     if not args or len(args) < 2:
         return
 
-    content = traverser._traverse_node(args[1])
-    set_HTML('insertAdjacentHTML', content, traverser)
+    set_HTML('insertAdjacentHTML', args[1], this.traverser)
 
 
 INSTANCE_DEFINITIONS.update({
@@ -157,8 +155,10 @@ INSTANCE_DEFINITIONS.update({
 })
 
 OBJECT_DEFINITIONS.update({
-    'innerHTML': {'set': partial(set_HTML, 'innerHTML')},
-    'outerHTML': {'set': partial(set_HTML, 'outerHTML')},
+    'innerHTML': {'set': lambda this, name, value: set_HTML(
+        'innerHTML', value, this.traverser)},
+    'outerHTML': {'set': lambda this, name, value: set_HTML(
+        'outerHTML', value, this.traverser)},
 })
 
 DOC_WRITE_MSG = ('https://developer.mozilla.org/docs/XUL/School_tutorial/'
@@ -168,7 +168,7 @@ DOC_WRITE_MSG = ('https://developer.mozilla.org/docs/XUL/School_tutorial/'
 @register_entity('document.writeln')
 @register_entity('document.write')
 def document_write(traverser):
-    def on_write(wrapper, arguments, traverser):
+    def on_write(this, args, callee):
         traverser.warning(
             err_id=('js', 'document.write', 'evil'),
             warning='Use of `document.write` strongly discouraged.',
@@ -177,11 +177,9 @@ def document_write(traverser):
                          'security repercussions when used improperly. '
                          'Therefore, it should not be used. See %s for more '
                          'information.' % DOC_WRITE_MSG))
-        if not arguments:
+        if not args:
             return
-        value = traverser._traverse_node(arguments[0])
-
-        set_HTML('document.write()', value, traverser)
+        set_HTML('document.write()', args[0], traverser)
 
     return {'return': on_write}
 
@@ -214,8 +212,8 @@ hook_global((u'Components', u'utils', u'exportFunction'),
                    'that this is done safely.'})
 
 
-def set__exposedProps__(new_value, traverser):
-    traverser.warning(
+def set__exposedProps__(this, name, value):
+    this.traverser.warning(
         err_id=('testcases_javascript_instanceproperties', '__exposedProps__'),
         warning='Use of deprecated __exposedProps__ declaration',
         description=(
@@ -240,34 +238,21 @@ OBJECT_DEFINITIONS.update({
 
 # Unsafe wrapper use.
 
-def js_unwrap(wrapper, arguments, traverser):
+def js_unwrap(this, args, callee):
     """Return the unwrapped variant of an unwrapped JSObject."""
-    if not arguments:
-        traverser._debug('UNWRAP:NO ARGS')
-        return
+    if args:
+        # FIXME(kris): We should be returning a new (cached) object here, not
+        # altering the original. Wrapping and unwrapping does not alter the
+        # original object.
+        args[0].value.is_unwrapped = True
 
-    with traverser._debug('UNWRAPPING OBJECT'):
-        obj = traverser._traverse_node(arguments[0])
-
-    # FIXME(kris): We should be returning a new (cached) object here, not
-    # altering the original. Wrapping and unwrapping does not alter the
-    # original object.
-    obj.value.is_unwrapped = True
-
-    return obj
+        return args[0]
 
 
-def js_wrap(wrapper, arguments, traverser):
+def js_wrap(this, args, callee):
     """Return the wrapped variant of an unwrapped JSObject."""
-    if not arguments:
-        traverser._debug('WRAP:NO ARGS')
-        return
-
-    traverser._debug('WRAPPING OBJECT')
-    obj = traverser._traverse_node(arguments[0])
-
-    if len(arguments) > 1:
-        traverser.warning(
+    if len(args) > 1:
+        this.traverser.warning(
             err_id=('testcases_js_xpcom', 'xpcnativewrapper', 'shallow'),
             warning='Shallow XPCOM wrappers should not be used',
             description='Shallow XPCOM wrappers are seldom necessary and '
@@ -280,15 +265,17 @@ def js_wrap(wrapper, arguments, traverser):
                          'applies `XPCNativeWrapper` to properties obtained '
                          'from these shallowly wrapped objects.',
             signing_severity='high')
+
         # Do not mark shallow wrappers as not unwrapped.
-        return obj
+        return args[0]
 
-    # FIXME(kris): We should be returning a new (cached) object here, not
-    # altering the original. Wrapping and unwrapping does not alter the
-    # original object.
-    obj.value.is_unwrapped = False
+    if args:
+        # FIXME(kris): We should be returning a new (cached) object here, not
+        # altering the original. Wrapping and unwrapping does not alter the
+        # original object.
+        args[0].value.is_unwrapped = False
 
-    return obj
+        return args[0]
 
 
 hook_global((u'unsafeWindow',),
@@ -345,10 +332,11 @@ hook_global((u'Function',), dangerous=DANGEROUS_EVAL)
 
 # And friends.
 
-def set_contentScript(value, traverser):
+def set_contentScript(this, name, value):
     """Warns when values are assigned to the `contentScript` properties,
     which are essentially the same as calling `eval`."""
 
+    traverser = this.traverser
     if value.is_literal():
         content_script = value.as_str()
 
@@ -373,7 +361,7 @@ OBJECT_DEFINITIONS.update({
 })
 
 
-def call_settimeout(a, t, e):
+def call_settimeout(this, args, callee):
     """
     Handler for setTimeout and setInterval. Should determine whether a[0]
     is a lambda function or a string. Strings are banned, lambda functions are
@@ -381,13 +369,10 @@ def call_settimeout(a, t, e):
     those, too.
     """
 
-    if not a:
+    if not args:
         return
 
-    if a[0]['type'] in ('FunctionExpression', 'ArrowFunctionExpression'):
-        return
-
-    if t(a[0]).callable:
+    if args[0].is_callable():
         return
 
     return {'err_id': ('javascript', 'dangerous_global', 'eval'),

@@ -38,12 +38,12 @@ hook_interface(('nsIJSON', 'decode'),
 
 # nsIWebBrowserPersist
 
-def webbrowserpersist(wrapper, arguments, traverser):
+def webbrowserpersist(this, args, callee):
     """
     Most nsIWebBrowserPersist should no longer be used, in favor of the new
     Downloads.jsm interfaces.
     """
-    traverser.warning(
+    this.traverser.warning(
         err_id=('testcases_javascript_call_definititions',
                 'webbrowserpersist'),
         warning='nsIWebBrowserPersist should no longer be used',
@@ -53,15 +53,15 @@ def webbrowserpersist(wrapper, arguments, traverser):
                      'http://mzl.la/downloads-jsm for more information.'))
 
 
-def webbrowserpersist_saveuri(wrapper, arguments, traverser):
+def webbrowserpersist_saveuri(this, args, callee):
     """
     nsIWebBrowserPersist.saveURI requires a valid privacy context as
     of Firefox 19
     """
-    if len(arguments) >= 7:
-        load_context = traverser._traverse_node(arguments[6])
-        if load_context.get_literal_value() is None:
-            traverser.warning(
+    if len(args) >= 7:
+        load_context = args[6]
+        if load_context.as_primitive() is None:
+            this.traverser.warning(
                 err_id=('testcases_javascript_call_definititions',
                         'webbrowserpersist_saveuri'),
                 warning=('saveURI should not be called with a null load '
@@ -71,7 +71,7 @@ def webbrowserpersist_saveuri(wrapper, arguments, traverser):
                              'acceptable only when no appropriate load '
                              'context exists.'))
 
-    webbrowserpersist(wrapper, arguments, traverser)
+    webbrowserpersist(this, args, callee)
 
 
 hook_interface(('nsIWebBrowserPersist', 'saveChannel'),

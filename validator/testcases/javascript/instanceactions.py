@@ -11,73 +11,57 @@ node
 """
 
 
-def addEventListener(args, traverser, node, wrapper):
+def addEventListener(this, args, callee):
     """
     Handle calls to addEventListener and make sure that the fourth argument is
     falsey.
     """
 
-    if not args or len(args) < 4:
-        return
-
-    fourth_arg = traverser._traverse_node(args[3])
-    if fourth_arg.get_literal_value():
-        traverser.err.notice(
+    if len(args) > 3 and args[3].as_bool():
+        this.traverser.notice(
             err_id=('js', 'instanceactions', 'addEventListener_fourth'),
             notice='`addEventListener` called with truthy fourth argument.',
             description='When called with a truthy forth argument, listeners '
                         'can be triggered potentially unsafely by untrusted '
-                        'code. This requires careful review.',
-            filename=traverser.filename,
-            line=traverser.line,
-            column=traverser.position,
-            context=traverser.context)
+                        'code. This requires careful review.')
 
 
-def createElement(args, traverser, node, wrapper):
+def createElement(this, args, callee):
     """Handles createElement calls"""
 
     if not args:
         return
 
-    args = map(traverser._traverse_node, args)
-
     name = args[0]
     if name.as_str().lower() == u'script':
-        _create_script_tag(traverser)
+        _create_script_tag(this.traverser)
     elif not name.is_clean_literal():
-        _create_variable_element(traverser)
+        _create_variable_element(this.traverser)
 
 
-def createElementNS(args, traverser, node, wrapper):
+def createElementNS(this, args, callee):
     """Handles createElementNS calls"""
 
-    if not args or len(args) < 2:
+    if len(args) < 2:
         return
-
-    args = map(traverser._traverse_node, args)
 
     name = args[1]
     if 'script' in name.as_str().lower():
-        _create_script_tag(traverser)
+        _create_script_tag(this.traverser)
     elif not name.is_clean_literal():
-        _create_variable_element(traverser)
+        _create_variable_element(this.traverser)
 
 
-def QueryInterface(args, traverser, node, wrapper):
+def QueryInterface(this, args, callee):
     """Handles QueryInterface calls"""
 
-    if not args:
-        return
-
-    from call_definitions import xpcom_constructor
-    return xpcom_constructor('QueryInterface', True, True)(
-        wrapper=node,
-        arguments=args,
-        traverser=traverser)
+    if args:
+        from call_definitions import xpcom_constructor
+        return xpcom_constructor('QueryInterface', True, True)(
+            this, args, callee)
 
 
-def getInterface(args, traverser, node, wrapper):
+def getInterface(this, args, callee):
     """Handles getInterface calls"""
 
     # This really only needs to be handled for nsIInterfaceRequestor
@@ -86,14 +70,10 @@ def getInterface(args, traverser, node, wrapper):
     # are unlikely to behave differently, we just process it for all
     # objects.
 
-    if not args:
-        return
-
-    from call_definitions import xpcom_constructor
-    return xpcom_constructor('getInterface')(
-        wrapper=node,
-        arguments=args,
-        traverser=traverser)
+    if args:
+        from call_definitions import xpcom_constructor
+        return xpcom_constructor('getInterface')(
+            this, args, callee)
 
 
 def _create_script_tag(traverser):
@@ -127,17 +107,15 @@ def _create_variable_element(traverser):
                      'createElement(el_type)'))
 
 
-def setAttribute(args, traverser, node, wrapper):
+def setAttribute(this, args, callee):
     """This ensures that setAttribute calls don't set on* attributes"""
 
     if not args:
         return
 
-    args = map(traverser._traverse_node, args)
-
     name = args[0]
     if name.as_str().lower().startswith('on'):
-        traverser.warning(
+        this.traverser.warning(
             err_id=('testcases_javascript_instanceactions', 'setAttribute',
                     'setting_on*'),
             warning='on* attribute being set using setAttribute',
@@ -152,8 +130,8 @@ def setAttribute(args, traverser, node, wrapper):
             signing_severity='medium')
 
 
-def launch(args, traverser, node, wrapper):
-    traverser.warning(
+def launch(this, args, callee):
+    this.traverser.warning(
         err_id=('testcases_javascript_instanceactions', 'launch'),
         warning='Potentially dangerous use of `launch()`',
         description='Use of the `nsIFile.launch()` method can be dangerous, '
@@ -161,21 +139,16 @@ def launch(args, traverser, node, wrapper):
         editors_only=True)
 
 
-def openDialog(args, traverser, node, wrapper):
+def openDialog(this, args, callee):
     """Raise an error if the first argument is a remote URL."""
-    if not args:
-        return
-    uri = traverser._traverse_node(args[0])
-    from call_definitions import open_in_chrome_context
-    open_in_chrome_context(uri, 'openDialog', traverser)
+    if args:
+        from call_definitions import open_in_chrome_context
+        open_in_chrome_context(args[0], 'openDialog', this.traverser)
 
 
-def bind(args, traverser, node, wrapper):
-    if 'callee' not in node and 'object' not in node['callee']:
-        return
-    obj = traverser._traverse_node(node['callee']['object'])
-    if obj.callable:
-        return obj
+def bind(this, args, callee):
+    if this.callable:
+        return this
 
 
 INSTANCE_DEFINITIONS = {
