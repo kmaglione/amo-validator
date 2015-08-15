@@ -19,15 +19,11 @@ def xpcom_constructor(method, extend=False, mutate=False):
             return None
 
         traverser = this.traverser
-        traverser._debug('(XPCOM Encountered)')
-
         iface = args[0]
 
         if 'xpcom_map' not in iface.hooks:
             iface = traverser.wrap()
             iface.hooks = {'xpcom_map': lambda: {'value': {}}}
-
-        traverser._debug('(Building XPCOM...)')
 
         inst = traverser._build_global(method, iface.hooks['xpcom_map']())
         inst.hooks['overwritable'] = True
@@ -121,8 +117,6 @@ def python_wrap(func, arguments, nargs=False):
             for arg in args:
                 params.append(_process_literal(arguments[0], arg))
 
-        this.traverser._debug('Calling wrapped Python function with: (%s)'
-                              % ', '.join(map(str, params)))
         try:
             output = func(*params)
         except (ValueError, TypeError, OverflowError):

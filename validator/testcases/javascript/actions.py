@@ -269,7 +269,7 @@ def _get_member_exp_property(traverser, node):
     if node['property']['type'] == 'Identifier' and not node.get('computed'):
         return unicode(node['property']['name'])
     else:
-        eval_exp = traverser.traverse(node['property'])
+        eval_exp = traverser.traverse(node, 'property')
         return eval_exp.as_str()
 
 
@@ -295,8 +295,10 @@ def _expand_globals(traverser, node):
 
 def trace_member(traverser, node, instantiate=False):
     'Traces a MemberExpression and returns the appropriate object'
+    traverser.debug('trace_member {node[type]} {object} {instantiate}',
+                    node=node, object=node.get('object'),
+                    instantiate=instantiate)
 
-    traverser._debug('TESTING>>%s' % node['type'])
     if node['type'] == 'MemberExpression':
         # x.y or x[y]
         # x = base
@@ -307,8 +309,6 @@ def trace_member(traverser, node, instantiate=False):
 
         # If we've got an XPCOM wildcard, return a copy of the entity.
         if 'xpcom_wildcard' in base.hooks:
-            traverser._debug('MEMBER_EXP>>XPCOM_WILDCARD')
-
             from predefinedentities import CONTRACT_ENTITIES
             if identifier in CONTRACT_ENTITIES:
                 kw = dict(err_id=('js', 'actions', 'dangerous_contract'),
@@ -323,7 +323,6 @@ def trace_member(traverser, node, instantiate=False):
 
         test_identifier(traverser, identifier)
 
-        traverser._debug('MEMBER_EXP>>PROPERTY: %s' % identifier)
         output = base.get(instantiate=instantiate, name=identifier)
 
         if base.hooks:
@@ -334,7 +333,6 @@ def trace_member(traverser, node, instantiate=False):
         return output
 
     elif node['type'] == 'Identifier':
-        traverser._debug('MEMBER_EXP>>ROOT:IDENTIFIER')
         test_identifier(traverser, node['name'])
 
         # If we're supposed to instantiate the object and it doesn't already
@@ -348,7 +346,6 @@ def trace_member(traverser, node, instantiate=False):
         return _expand_globals(traverser, output)
 
     else:
-        traverser._debug('MEMBER_EXP>>ROOT:EXPRESSION')
         # It's an expression, so just try your damndest.
         return traverser.traverse(node)
 
@@ -380,7 +377,6 @@ def _function(traverser, node):
         context = JSContext('default', traverser=traverser)
         traverser._push_context(context)
 
-        traverser._debug('THIS_PUSH')
         # Huh what? That is not how `this` works at all.
         traverser.this_stack.append(context)  # Allow references to "this"
 
@@ -407,13 +403,12 @@ def _function(traverser, node):
                 # static function.
                 local_context.set(param, var)
 
-            traverser.traverse(node['body'])
+            traverser.traverse(node, 'body')
 
         finally:
             # Since we need to manually manage the "this" stack, pop off that
             # context.
             traverser.this_stack.pop()
-            traverser._debug('THIS_POP')
             traverser._pop_context()
 
         # Call all of the function collection's members to traverse all of the
@@ -443,7 +438,8 @@ def _func_expr(traverser, node):
 def _define_with(traverser, node):
     'Handles `with` statements'
 
-    object_ = traverser.traverse(node['object'])
+    object_ = traverser.traverse(node, 'object')
+
     if isinstance(object_, JSWrapper) and isinstance(object_.value, JSObject):
         traverser.contexts[-1] = object_.value
         traverser.contexts.append(JSContext('block'))
@@ -453,9 +449,6 @@ def _define_with(traverser, node):
 def _define_var(traverser, node):
     'Creates a local context variable'
 
-    traverser._debug('VARIABLE_DECLARATION')
-    traverser.debug_level += 1
-
     declarations = (node['declarations'] if 'declarations' in node
                     else node['head'])
 
@@ -464,7 +457,6 @@ def _define_var(traverser, node):
 
         # It could be deconstruction of variables :(
         if declaration['id']['type'] == 'ArrayPattern':
-
             vars = []
             for element in declaration['id']['elements']:
                 # NOTE : Multi-level array destructuring sucks. Maybe implement
@@ -496,7 +488,7 @@ def _define_var(traverser, node):
             # It's being assigned by a JSArray (presumably)
             elif declaration['init']['type'] == 'ArrayExpression':
 
-                assigner = traverser.traverse(declaration['init'])
+                assigner = traverser.traverse(declaration, 'init')
                 for value in assigner.value.elements:
                     if vars[0]:
                         traverser._declare_variable(vars[0], value)
@@ -504,7 +496,7 @@ def _define_var(traverser, node):
 
         elif declaration['id']['type'] == 'ObjectPattern':
 
-            init = traverser.traverse(declaration['init'])
+            init = traverser.traverse(declaration, 'init')
 
             def _proc_objpattern(init_obj, properties):
                 for prop in properties:
@@ -530,10 +522,7 @@ def _define_var(traverser, node):
 
         else:
             var_name = declaration['id']['name']
-            traverser._debug('NAME>>%s' % var_name)
-
-            var_value = traverser.traverse(declaration['init'])
-            traverser._debug('VALUE>>%r' % var_value)
+            var_value = traverser.traverse(declaration, 'init')
 
             if not isinstance(var_value, JSWrapper):
                 var = traverser.wrap(var_value, const=kind == 'const')
@@ -544,9 +533,7 @@ def _define_var(traverser, node):
             traverser._declare_variable(var_name, var, type_=kind)
 
     if 'body' in node:
-        traverser.traverse(node['body'])
-
-    traverser.debug_level -= 1
+        traverser.traverse(node, 'body')
 
     # The "Declarations" branch contains custom elements.
     return True
@@ -574,7 +561,7 @@ def _define_obj(traverser, node):
                     name = {'property': key['name']}
                 var_name = _get_member_exp_property(traverser, name)
 
-        var_value = traverser.traverse(prop['value'])
+        var_value = traverser.traverse(prop, 'value')
         obj.set(var_name, var_value)
 
         # TODO: Observe "kind"
@@ -634,7 +621,7 @@ def _call_expression(traverser, node):
             for arg in node['arguments']]
 
     result = None
-    member = traverser.traverse(node['callee'])
+    member = traverser.traverse(node, 'callee')
 
     if 'object' in node['callee']:
         this = trace_member(traverser, node['callee']['object'])
@@ -725,7 +712,7 @@ def _expression(traverser, node):
     This is a helper method that allows node definitions to point at
     `traverse` without needing a reference to a traverser.
     """
-    return traverser.traverse(node['expression'])
+    return traverser.traverse(node, 'expression')
 
 
 def _get_this(traverser, node):
@@ -744,14 +731,13 @@ def _new(traverser, node):
         for arg in args:
             traverser.traverse(arg, source='arguments')
     else:
-        traverser.traverse(args)
+        traverser.traverse(node, 'arguments')
 
-    elem = traverser.traverse(node['callee'])
+    elem = traverser.traverse(node, 'callee')
     if not isinstance(elem, JSWrapper):
         elem = traverser.wrap(elem)
 
     if elem.hooks:
-        traverser._debug('Making overwritable')
         elem.hooks = deepcopy(elem.hooks)
         elem.hooks['overwritable'] = True
     return elem
@@ -774,10 +760,7 @@ def _ident(traverser, node):
 def _expr_assignment(traverser, node):
     """Evaluate an AssignmentExpression node."""
 
-    traverser._debug('ASSIGNMENT_EXPRESSION')
-
-    with traverser._debug('ASSIGNMENT>>PARSING RIGHT'):
-        right = traverser.traverse(node['right'])
+    right = traverser.traverse(node, 'right')
 
     operator = node['operator']
 
@@ -789,7 +772,6 @@ def _expr_assignment(traverser, node):
         readonly_value = is_shared_scope(traverser)
 
         node_left = node['left']
-        traverser._debug('ASSIGNMENT:DIRECT(%s)' % node_left['type'])
 
         if node_left['type'] == 'Identifier':
             # Identifiers just need the ID name and a value to push.
@@ -813,9 +795,6 @@ def _expr_assignment(traverser, node):
                                 not left.hooks.get('overwritable'))
 
             member_property = _get_member_exp_property(traverser, node_left)
-            traverser._debug('ASSIGNMENT:MEMBER_PROPERTY(%s)'
-                             % member_property)
-            traverser._debug('ASSIGNMENT:GLOB_OV::%s' % global_overwrite)
 
             if isinstance(left.value, JSObject):
                 left.value.set(member_property, right)
@@ -831,13 +810,7 @@ def _expr_assignment(traverser, node):
                         global_overwrite = True
                         readonly_value = value_hook['readonly']
         else:
-            with traverser._debug('ASSIGNMENT>>PARSING LEFT'):
-                left = traverser.traverse(node['left'])
-
-        traverser._debug('ASSIGNMENT:DIRECT:GLOB_OVERWRITE %s' %
-                         global_overwrite)
-        traverser._debug('ASSIGNMENT:DIRECT:READONLY %r' %
-                         readonly_value)
+            left = traverser.traverse(node, 'left')
 
         if callable(readonly_value):
             readonly_value = readonly_value(left, right)
@@ -861,15 +834,12 @@ def _expr_assignment(traverser, node):
 
         return right
 
-    with traverser._debug('ASSIGNMENT>>PARSING LEFT'):
-        left = traverser.traverse(node['left'])
+    left = traverser.traverse(node, 'left')
 
     assert operator[-1] == '='
     wrapper = _binary_op(operator[:-1], left, right, traverser)
 
-    with traverser._debug('ASSIGNMENT::New value >> %s' % wrapper):
-        left.set_value(wrapper)
-
+    left.set_value(wrapper)
     return left
 
 
@@ -880,31 +850,27 @@ def _expr_binary(traverser, node):
 
     # Select the proper operator.
     operator = node['operator']
-    traverser._debug('BIN_OPERATOR>>%s' % operator)
 
     # Traverse the left half of the binary expression.
-    with traverser._debug('BIN_EXP>>l-value'):
-        if (node['left']['type'] == 'BinaryExpression' and
-                '__traversal' not in node['left']):
-            # Process the left branch of the binary expression directly. This
-            # keeps the recursion cap in line and speeds up processing of
-            # large chains of binary expressions.
-            left = _expr_binary(traverser, node['left'])
-            node['left']['__traversal'] = left
-        else:
-            left = traverser.traverse(node['left'])
+    if (node['left']['type'] == 'BinaryExpression' and
+            '__traversal' not in node['left']):
+        # Process the left branch of the binary expression directly. This
+        # keeps the recursion cap in line and speeds up processing of
+        # large chains of binary expressions.
+        left = _expr_binary(traverser, node['left'])
+        node['left']['__traversal'] = left
+    else:
+        left = traverser.traverse(node, 'left')
 
     # Traverse the right half of the binary expression.
-    with traverser._debug('BIN_EXP>>r-value'):
-        if (operator == 'instanceof' and
-                node['right']['type'] == 'Identifier' and
-                node['right']['name'] == 'Function'):
-            # We make an exception for instanceof's r-value if it's a
-            # dangerous global, specifically Function.
-            return traverser.wrap(True)
-        else:
-            right = traverser.traverse(node['right'])
-            traverser._debug('Is dirty? %r' % right.dirty, 1)
+    if (operator == 'instanceof' and
+            node['right']['type'] == 'Identifier' and
+            node['right']['name'] == 'Function'):
+        # We make an exception for instanceof's r-value if it's a
+        # dangerous global, specifically Function.
+        return traverser.wrap(True)
+    else:
+        right = traverser.traverse(node, 'right')
 
     return _binary_op(operator, left, right, traverser)
 
@@ -933,7 +899,7 @@ def _expr_unary(traverser, node):
     """Evaluate a UnaryExpression node."""
 
     operator = node['operator']
-    wrapper = traverser.traverse(node['argument'])
+    wrapper = traverser.traverse(node, 'argument')
 
     value = traverser.unary_ops[operator](wrapper)
     return traverser.wrap(value, dirty=wrapper.dirty)

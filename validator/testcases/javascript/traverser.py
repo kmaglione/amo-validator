@@ -59,21 +59,26 @@ class Traverser(object):
 
         self._push_context()
 
-    def _debug(self, data, indent=0):
+    def debug(self, data, indent=0, **kw):
         """Write a message to the console if debugging is enabled."""
         if DEBUG:
-            output = data
-            if isinstance(data, (JSObject, JSWrapper)):
+            if kw:
+                output = data.format(**kw)
+            elif isinstance(data, (JSObject, JSWrapper)):
                 output = repr(data)
+            else:
+                output = unicode(data)
 
-            output = unicode(output)
-            print ('. ' * (self.debug_level + indent) +
-                   output.encode('ascii', 'replace'))
+            indent = self.debug_level + indent
+            fill = (u'\u00b7 ' * ((indent + 1) / 2))[:indent]
+
+            print (u'[{self.line:02}:{self.position:02}] '
+                   u'{fill}{output}'.format(
+                       self=self, fill=fill, output=output).encode('utf-8'))
 
         return self._debug_level
 
     def run(self, data):
-        self._debug('START>>')
         try:
             self.function_collection.append([])
             self.traverse(data)
@@ -84,8 +89,6 @@ class Traverser(object):
         except Exception:
             self.system_error(exc_info=sys.exc_info())
             return
-
-        self._debug('END>>')
 
         assert len(self.contexts) == 1
 
@@ -103,7 +106,6 @@ class Traverser(object):
             global_context_size = sum(
                 1 for name in self.contexts[0].data if
                 name not in POLLUTION_EXCEPTIONS)
-            self._debug('Final context size: %d' % global_context_size)
 
             if (global_context_size > 3 and not self.is_jsm and
                     'is_jetpack' not in self.err.metadata and
@@ -133,7 +135,11 @@ class Traverser(object):
 
         return JSWrapper(value, traverser=self, **kw)
 
-    def traverse(self, node, source=None):
+    def traverse(self, node, branch=None, source=None):
+        parent = node
+        if branch:
+            node = node[branch]
+
         if node is None:
             return self.wrap(dirty=True)
 
@@ -142,19 +148,27 @@ class Traverser(object):
 
         # Simple caching to prevent re-traversal
         if '__traversal' not in node:
-            with self._debug('TRAVERSE>>%s' % node['type']):
-                result = self.wrap(self._traverse(node, source))
-                result.parse_node = node
+            # Extract location information if it's available
+            if node.get('loc'):
+                start = node['loc']['start']
+                self.line = self.start_line + start['line']
+                self.position = start['column']
+
+            if branch and 'type' in parent:
+                self.debug('TRAVERSE {parent[type]} -> {branch}:{node[type]}',
+                           node=node, parent=parent, branch=branch)
+            else:
+                self.debug('TRAVERSE {node[type]}', node=node)
+
+            self.debug_level += 1
+            result = self.wrap(self._traverse(node, source))
+            result.parse_node = node
+            self.debug_level -= 1
             node['__traversal'] = result
 
         return node['__traversal']
 
     def _traverse(self, node, source=None):
-        # Extract location information if it's available
-        if 'loc' in node and node['loc'] is not None:
-            self.line = self.start_line + int(node['loc']['start']['line'])
-            self.position = int(node['loc']['start']['column'])
-
         if node.get('type') not in DEFINITIONS:
             if node.get('type'):
                 key = 'unknown_node_types'
@@ -188,12 +202,10 @@ class Traverser(object):
             # traverse each of the branches.
             for branch in node_def.branches:
                 if branch in node:
-                    self._debug('BRANCH>>%s' % branch)
-                    branch = node[branch]
-                    if isinstance(branch, list):
-                        map(self.traverse, branch)
+                    if isinstance(node[branch], list):
+                        map(self.traverse, node[branch])
                     else:
-                        self.traverse(branch)
+                        self.traverse(node, branch)
 
         # WithStatements declare two blocks: one for the block and one for
         # the object that's being withed. We need both because of `let`s.
@@ -221,9 +233,6 @@ class Traverser(object):
         'Adds a block context to the current interpretation frame'
         self.contexts.append(JSContext('block', traverser=self))
 
-        self.debug_level += 1
-        self._debug('CONTEXT>>%d' % len(self.contexts))
-
     def _push_context(self, default=None):
         'Adds a variable context to the current interpretation frame'
 
@@ -231,18 +240,11 @@ class Traverser(object):
             default = JSContext('default', traverser=self)
         self.contexts.append(default)
 
-        self.debug_level += 1
-        self._debug('CONTEXT>>%d' % len(self.contexts))
-
     def _pop_context(self):
         'Adds a variable context to the current interpretation frame'
 
         assert len(self.contexts) > 1
-        popped_context = self.contexts.pop()
-
-        self.debug_level -= 1
-        self._debug('POP_CONTEXT>>%d %r' % (len(self.contexts),
-                                            popped_context))
+        self.contexts.pop()
 
     def _peek_context(self, depth=1):
         """Returns the most recent context. Note that this should NOT be used
@@ -253,20 +255,16 @@ class Traverser(object):
     def _seek_variable(self, variable):
         'Returns the value of a variable that has been declared in a context'
 
-        self._debug('SEEK>>%s' % variable)
-
         # Look for the variable in the local contexts first
         local_variable = self._seek_local_variable(variable)
         if local_variable is not None:
             return local_variable
 
         # Seek in globals for the variable instead.
-        self._debug('SEEK_GLOBAL>>%s' % variable)
         if self._is_global(variable):
-            self._debug('SEEK_GLOBAL>>FOUND>>%s' % variable)
             return self._build_global(variable, GLOBAL_ENTITIES[variable])
 
-        self._debug('SEEK_GLOBAL>>FAILED')
+        self.debug('SEEK_GLOBAL>>FAILED')
         # If we can't find a variable, we always return a dummy object.
         return self.wrap()
 
@@ -283,7 +281,7 @@ class Traverser(object):
         for context in reversed(self.contexts):
             # If it has the variable, return it.
             if context.has_var(variable):
-                self._debug('SEEK>>FOUND')
+                self.debug('SEEK>>FOUND')
                 return context.get(variable)
 
     def _is_global(self, name):
@@ -320,10 +318,7 @@ class Traverser(object):
             elif isinstance(dangerous, dict):
                 kwargs.update(dangerous)
 
-            self._debug('DANGEROUS')
             self.warning(**kwargs)
-
-        self._debug('BUILT_GLOBAL')
 
         return result
 
