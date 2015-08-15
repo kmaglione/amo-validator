@@ -98,7 +98,7 @@ def trace_member(traverser, node, instantiate=False):
         # If we're supposed to instantiate the object and it doesn't already
         # exist, instantitate the object.
         if instantiate and not traverser._is_defined(node['name']):
-            output = traverser.wrap(JSObject())
+            output = traverser.wrap()
             traverser.contexts[0].set(node['name'], output)
         else:
             output = traverser._seek_variable(node['name'])
@@ -155,7 +155,7 @@ def _function(traverser, node):
 
         local_context = traverser._peek_context(1)
         for param in params:
-            var = traverser.wrap(lazy=True)
+            var = traverser.wrap(dirty=True)
 
             # We can assume that the params are static because we don't care
             # about what calls the function. We want to know whether the
@@ -311,7 +311,7 @@ def _define_obj(traverser, node):
     'Creates a local context object'
 
     obj = JSObject()
-    wrapper = traverser.wrap(obj, lazy=True)
+    wrapper = traverser.wrap(obj)
 
     for prop in node['properties']:
         if prop['type'] == 'PrototypeMutation':
@@ -367,7 +367,7 @@ def _define_literal(traverser, node):
     """
     value = node['value']
     if isinstance(value, dict):
-        return traverser.wrap(JSObject(), dirty=True)
+        return traverser.wrap(dirty=True)
 
     wrapper = traverser.wrap(value)
     test_literal(traverser, wrapper)
@@ -450,7 +450,7 @@ def _call_expression(traverser, node):
         return member.hooks['return'](wrapper=member, arguments=args,
                                       traverser=traverser)
 
-    return traverser.wrap(JSObject(), dirty=True)
+    return traverser.wrap(dirty=True)
 
 
 def _readonly_top(traverser, right, node_right):
@@ -519,7 +519,7 @@ def _ident(traverser, node):
     if traverser._is_defined(name):
         return traverser._seek_variable(name)
 
-    return traverser.wrap(JSObject(), dirty=True)
+    return traverser.wrap(dirty=True)
 
 
 def _expr_assignment(traverser, node):
@@ -726,7 +726,7 @@ def _expr_binary(traverser, node):
                 node['right']['name'] == 'Function'):
             # We make an exception for instanceof's r-value if it's a
             # dangerous global, specifically Function.
-            return traverser.wrap(value=True)
+            return traverser.wrap(True)
         else:
             right = traverser._traverse_node(node['right'])
             traverser._debug('Is dirty? %r' % right.dirty, 1)

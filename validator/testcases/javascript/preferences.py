@@ -5,7 +5,6 @@ from validator.decorator import define_post_init
 from validator.testcases.regex import javascript as regex_javascript
 from validator.testcases.regex.javascript import JSRegexTest, STRING_REGEXPS
 from .instanceactions import INSTANCE_DEFINITIONS
-from .jstypes import JSLiteral, JSWrapper
 from .predefinedentities import GLOBAL_ENTITIES, INTERFACES, build_quick_xpcom
 
 
@@ -208,8 +207,7 @@ def call_pref(a, t, e):
     if not traverser.filename.startswith('defaults/preferences/') or not args:
         return
 
-    set_preference(JSWrapper(JSLiteral(None), traverser=traverser),
-                   args, traverser)
+    set_preference(traverser.wrap(None), args, traverser)
 
     value = traverser._traverse_node(args[0]).as_str()
     return test_preference(value)

@@ -10,7 +10,6 @@ from ..scripting import test_js_file
 from .entity_values import register_entity
 from .instanceactions import INSTANCE_DEFINITIONS
 from .instanceproperties import OBJECT_DEFINITIONS
-from .jstypes import JSObject, JSWrapper
 from .predefinedentities import hook_global
 
 
@@ -71,9 +70,7 @@ def set_HTML(function, new_value, traverser):
     """Test that values being assigned to innerHTML and outerHTML are not
     dangerous."""
 
-    if not isinstance(new_value, JSWrapper):
-        new_value = JSWrapper(new_value, traverser=traverser)
-
+    new_value = traverser.wrap(new_value)
     if new_value.is_literal():
         literal_value = new_value.get_literal_value()
         if isinstance(literal_value, basestring):
@@ -253,9 +250,6 @@ def js_unwrap(wrapper, arguments, traverser):
 
     with traverser._debug('UNWRAPPING OBJECT'):
         obj = traverser._traverse_node(arguments[0])
-        if obj.value is None:
-            traverser._debug('NOTHING TO UNWRAP')
-            return JSWrapper(JSObject(unwrapped=True), traverser=traverser)
 
     # FIXME(kris): We should be returning a new (cached) object here, not
     # altering the original. Wrapping and unwrapping does not alter the
@@ -273,9 +267,6 @@ def js_wrap(wrapper, arguments, traverser):
 
     traverser._debug('WRAPPING OBJECT')
     obj = traverser._traverse_node(arguments[0])
-    if obj.value is None:
-        traverser._debug('WRAPPING OBJECT>>NOTHING TO WRAP')
-        return JSWrapper(JSObject(), traverser=traverser)
 
     if len(arguments) > 1:
         traverser.warning(

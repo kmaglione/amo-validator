@@ -191,7 +191,7 @@ class JSObject(JSValue):
             if callable(output):
                 output = output()
         elif instantiate:
-            output = self.traverser.wrap(JSObject(), dirty=True)
+            output = self.traverser.wrap(dirty=True)
             self.set(name, output)
 
         modifier = instanceproperties.get_operation('get', name)
@@ -199,7 +199,7 @@ class JSObject(JSValue):
             modifier(self.traverser)
 
         if output is None:
-            return self.traverser.wrap(JSObject(), dirty=True)
+            return self.traverser.wrap(dirty=True)
         if not isinstance(output, JSWrapper):
             output = self.traverser.wrap(output)
         return output
@@ -273,15 +273,15 @@ class JSContext(JSObject):
 class JSWrapper(object):
     """Wraps a JS value and handles contextual functions for it."""
 
-    def __init__(self, value=Sentinel, const=False, dirty=False, lazy=False,
-                 hooks=None, traverser=None, callable=False, setter=None):
+    def __init__(self, value=Sentinel, const=False, dirty=False, hooks=None,
+                 traverser=None, callable=False, setter=None):
 
         assert traverser is not None
 
         self.const = const
         self.traverser = traverser
-        self.value = None  # Instantiate the placeholder value
-        self.dirty = False  # Also not yet...
+        self.value = None
+        self.dirty = False
 
         self.hooks = hooks.copy() if hooks else {}
 
@@ -291,15 +291,30 @@ class JSWrapper(object):
         # Used for predetermining set operations
         self.setter = setter
 
-        if value is Sentinel:
-            # No value -> empty object.
-            value = JSObject()
+        if isinstance(value, JSObject):
+            value.traverser = traverser
 
-        self.set_value(value, overwrite_const=True)
+        if value is not Sentinel and (setter or hooks):
+            self.set_value(value, overwrite_const=True)
+        else:
+            self._initial_value = value
 
         self.dirty = dirty or self.dirty
-        self.lazy = lazy
         self.callable = callable
+
+    _value = None
+    _initial_value = None
+
+    @property
+    def value(self):
+        if self._value is None:
+            self.set_value(self._initial_value, lazy=True)
+        return self._value
+
+    @value.setter
+    def value(self, value):
+        self._value = value
+        return value
 
     def is_callable(self):
         return self.callable or ('return' in self.hooks and
@@ -327,38 +342,45 @@ class JSWrapper(object):
     def as_str(self):
         return self.value.as_str()
 
-    def set_value(self, value, overwrite_const=False):
+    def set_value(self, value, overwrite_const=False, lazy=False):
         """Assigns a value to the wrapper"""
+
+        if value is Sentinel:
+            # No value -> empty object.
+            value = JSObject()
 
         traverser = self.traverser
 
-        if self.const and not overwrite_const:
-            traverser.warning(
-                err_id=('testcases_javascript_traverser',
-                        'JSWrapper_set_value', 'const_overwrite'),
-                warning='Overwritten constant value',
-                description='A variable declared as constant has been '
-                            'overwritten in some JS code.')
+        # Don't bother with setter hooks if we're just lazily constructing our
+        # initial value.
+        if not lazy:
+            if self.const and not overwrite_const:
+                traverser.warning(
+                    err_id=('testcases_javascript_traverser',
+                            'JSWrapper_set_value', 'const_overwrite'),
+                    warning='Overwritten constant value',
+                    description='A variable declared as constant has been '
+                                'overwritten in some JS code.')
 
-        # Process any setter/modifier
-        if self.setter:
-            value = self.setter(value, traverser) or value or None
+            # Process any setter/modifier
+            if self.setter:
+                value = self.setter(value, traverser) or value or None
 
-        if value is not None and value == self.value:
-            return self
+            # We want to obey the permissions of global objects
+            from predefinedentities import is_shared_scope
 
-        # We want to obey the permissions of global objects
-        from predefinedentities import is_shared_scope
+            if (not self.hooks.get('overwriteable', True) and
+                    is_shared_scope(traverser)):
+                traverser.warning(
+                    err_id=('testcases_javascript_jstypes',
+                            'JSWrapper_set_value', 'global_overwrite'),
+                    warning='Global overwrite',
+                    description='An attempt to overwrite a global variable '
+                                'was made in some JS code.')
+                return self
 
-        if (not self.hooks.get('overwriteable', True) and
-                is_shared_scope(traverser)):
-            traverser.warning(
-                err_id=('testcases_javascript_jstypes', 'JSWrapper_set_value',
-                        'global_overwrite'),
-                warning='Global overwrite',
-                description='An attempt to overwrite a global variable was '
-                            'made in some JS code.')
-            return self
+        if value is not None and value == self._value:
+            return self.value
 
         if callable(value):
             value = value(traverser)
@@ -372,11 +394,10 @@ class JSWrapper(object):
         # If the value being assigned is a wrapper as well, copy it in
         elif isinstance(value, JSWrapper):
             self.value = value.value
-            self.lazy = value.lazy
             self.dirty = value.dirty
             self.hooks = value.hooks
             # const does not carry over on reassignment
-            return self
+            return self.value
         elif isinstance(value, Iterable):
             value = JSArray(value, traverser=self.traverser)
         elif isinstance(value, dict):
@@ -385,7 +406,7 @@ class JSWrapper(object):
 
         value.traverser = self.traverser
         self.value = value
-        return self
+        return value
 
     def get(self, name, instantiate=False):
         """Retrieve a property from the variable."""
@@ -399,7 +420,7 @@ class JSWrapper(object):
         # FIXME: <IS_GLOBAL>
         if self.hooks:
             if 'value' not in hooks:
-                output = traverser.wrap(JSObject(), hooks={'value': {}})
+                output = traverser.wrap(hooks={'value': {}})
 
                 for key in ('dangerous', 'readonly', 'name'):
                     if key in self.hooks:

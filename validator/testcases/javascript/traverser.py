@@ -130,7 +130,7 @@ class Traverser(object):
 
     def _traverse_node(self, node, source=None):
         if node is None:
-            return self.wrap(JSObject(), dirty=True)
+            return self.wrap(dirty=True)
 
         # Simple caching to prevent retraversal
         if '__traversal' in node and node['__traversal'] is not None:
@@ -152,7 +152,7 @@ class Traverser(object):
 
                 self.err.metadata[key][node['type']] += 1
 
-            return self.wrap(JSObject(), dirty=True)
+            return self.wrap(dirty=True)
 
         self._debug('TRAVERSE>>%s' % node['type'])
         self.debug_level += 1
@@ -215,7 +215,7 @@ class Traverser(object):
             return action_result
 
         node['__traversal'] = None
-        return self.wrap(JSObject(), dirty=True)
+        return self.wrap(dirty=True)
 
     def _push_block_context(self):
         'Adds a block context to the current interpretation frame'
@@ -268,7 +268,7 @@ class Traverser(object):
 
         self._debug('SEEK_GLOBAL>>FAILED')
         # If we can't find a variable, we always return a dummy object.
-        return self.wrap(JSObject())
+        return self.wrap()
 
     def _is_defined(self, variable):
         return variable in GLOBAL_ENTITIES or self._is_local_variable(variable)
@@ -319,7 +319,7 @@ class Traverser(object):
         entity.setdefault('name', name)
 
         # Build out the wrapper object from the global definition.
-        result = self.wrap(hooks=entity, lazy=True)
+        result = self.wrap(hooks=entity)
         result = actions._expand_globals(self, result)
 
         self._debug('BUILT_GLOBAL')
