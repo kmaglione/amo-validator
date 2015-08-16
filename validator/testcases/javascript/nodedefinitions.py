@@ -36,7 +36,7 @@ DEFINITIONS = {
     'BreakStatement': node(),
     'ContinueStatement': node(),
     'WithStatement': node(branches=('body', 'object'),
-                          action=actions._define_with, is_block=True),
+                          action=actions._define_with),
     'SwitchStatement': node(branches=('test', 'cases'), is_block=True),
     'ReturnStatement': node(branches=('argument', )),
     'ThrowStatement': node(branches=('argument', )),
@@ -102,7 +102,9 @@ DEFINITIONS = {
     'ArrayPattern': node(),
 
     'SwitchCase': node(branches=('test', 'consequent')),
-    'CatchClause': node(branches=('param', 'guard', 'body'), returns=True),
+    'CatchClause': node(action=actions._catch,
+                        branches=('param', 'guard', 'body'), returns=True,
+                        is_block=True),
     'ComprehensionBlock': node(branches=('left', 'right'), returns=True),
 
     'Literal': node(action=actions._define_literal, returns=True),

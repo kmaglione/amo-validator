@@ -203,7 +203,7 @@ class JSObject(JSValue):
                 output = output()
         elif instantiate:
             output = self.traverser.wrap(dirty='GetInstantiate')
-            self.set(name, output)
+            self.set(name, output, inferred=True)
 
         modifier = instanceproperties.get_operation('get', name)
         if modifier:
@@ -221,7 +221,7 @@ class JSObject(JSValue):
     def as_primitive(self):
         return u'[object Object]'
 
-    def set(self, name, value):
+    def set(self, name, value, inferred=False):
         modifier = instanceproperties.get_operation('set', name)
         if modifier:
             modified_value = modifier(self, name, value)
@@ -248,6 +248,8 @@ class JSObject(JSValue):
                              'submission.',
                 signing_severity='high')
 
+        value = self.traverser.wrap(value)
+        value.inferred = inferred
         self.data[name] = value
 
     def has_var(self, name):
@@ -280,6 +282,10 @@ class JSContext(JSObject):
         super(JSContext, self).__init__(**kw)
         self.context_type = context_type
 
+    def repr_keywords(self):
+        return dict(super(JSContext, self).repr_keywords(),
+                    context_type=self.context_type)
+
 
 class JSWrapper(object):
     """Wraps a JS value and handles contextual functions for it."""
@@ -288,6 +294,9 @@ class JSWrapper(object):
                  traverser=None, callable=False, setter=None):
 
         assert traverser is not None
+
+        self.location = (traverser.filename, traverser.line,
+                         traverser.position)
 
         self.const = const
         self.traverser = traverser
@@ -315,6 +324,9 @@ class JSWrapper(object):
 
     _value = None
     _initial_value = None
+    # True if the existence of a property was inferred, because it was
+    # accessed, rather than it being explicitly declared or assigned.
+    inferred = False
 
     @property
     def value(self):
@@ -373,6 +385,8 @@ class JSWrapper(object):
         if value is Sentinel:
             # No value -> empty object.
             value = JSObject()
+        else:
+            self.inferred = False
 
         traverser = self.traverser
 
@@ -529,7 +543,7 @@ class JSWrapper(object):
 
     def __repr__(self):
         keywords = []
-        for keyword in ('dirty', 'callable', 'hooks'):
+        for keyword in ('dirty', 'callable', 'hooks', 'inferred'):
             keywords.append('{key}={value!r}'.format(
                 key=keyword, value=getattr(self, keyword)))
 
@@ -677,22 +691,16 @@ class JSArray(JSObject):
         finally:
             self.recursing = False
 
-    def set(self, index, value):
+    def set(self, index, value, **kw):
         try:
             index = int(index)
-            # Ignore floating point indexes
-            if index != float(index) or index < 0:
-                return super(JSArray, self).set(index, value)
         except ValueError:
-            return super(JSArray, self).set(index, value)
+            pass
 
-        if len(self.elements) > index:
+        if isinstance(index, int) and 0 <= index <= 10000:
+            while len(self.elements) <= index:
+                self.elements.append(None)
+
             self.elements[index] = self.traverser.wrap(value)
         else:
-            # Max out the array size at 100000
-            index = min(index, 100000)
-            # Assigning to an index higher than the top of the list pads the
-            # list with nulls
-            while len(self.elements) < index:
-                self.elements.append(None)
-            self.elements.append(self.traverser.wrap(value))
+            super(JSArray, self).set(index, value, **kw)

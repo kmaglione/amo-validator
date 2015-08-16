@@ -1,4 +1,5 @@
 from collections import defaultdict
+from itertools import islice
 import re
 import sys
 import types
@@ -16,19 +17,17 @@ DEBUG = False
 IN_TESTS = False
 IGNORE_POLLUTION = False
 POLLUTION_COMPONENTS_PATH = re.compile(r'/?components/.*\.jsm?')
-POLLUTION_EXCEPTIONS = set(['Cc', 'Ci', 'Cu', ])
 
 
 class Traverser(object):
     """Traverses the AST Tree and determines problems with a chunk of JS."""
 
-    def __init__(self, err, filename, start_line=0, context=None,
-                 is_jsm=False):
+    def __init__(self, err, filename, start_line=0, context=None, is_jsm=False,
+                 pollutable=False):
         self.err = err
         self.is_jsm = is_jsm
 
         self.contexts = []
-        self.block_contexts = []
         self.filename = filename
         self.start_line = start_line
         self.polluted = False
@@ -36,11 +35,11 @@ class Traverser(object):
         self.position = 0  # Column number
         self.context = context
 
+        self.pollutable = pollutable
+
         self.unary_ops = actions.UnaryOps(self)
         self.binary_ops = actions.BinaryOps(self)
 
-        # Can use the `this` object
-        self.can_use_this = False
         self.this_stack = []
 
         # For ordering of function traversal.
@@ -91,6 +90,7 @@ class Traverser(object):
             return
 
         assert len(self.contexts) == 1
+        assert len(self.function_collection) == 0
 
         # If we're running tests, save a copy of the global context for
         # inspection.
@@ -98,32 +98,28 @@ class Traverser(object):
             self.err.final_context = self.contexts[0]
 
         if self.pollutable:
-            # Ignore anything in the components/ directory
-            if POLLUTION_COMPONENTS_PATH.match(self.filename):
-                return
+            context = self.contexts[0]
+            pollution = [var for var, wrapper in context.data.iteritems()
+                         if not (var in GLOBAL_ENTITIES or wrapper.inferred)]
 
-            # This performs the namespace pollution test.
-            global_context_size = sum(
-                1 for name in self.contexts[0].data if
-                name not in POLLUTION_EXCEPTIONS)
-
-            if (global_context_size > 3 and not self.is_jsm and
-                    'is_jetpack' not in self.err.metadata and
-                    self.err.get_resource('em:bootstrap') != 'true'):
-                self.err.warning(
-                    err_id=('testcases_javascript_traverser', 'run',
-                            'namespace_pollution'),
-                    warning='JavaScript namespace pollution',
-                    description=(
-                        'Your add-on contains a large number of global '
-                        'variables, which may conflict with other '
-                        'add-ons. For more information, see '
-                        'http://blog.mozilla.com/addons/2009/01/16/'
-                        'firefox-extensions-global-namespace-pollution/'
-                        ', or use JavaScript modules.',
-                        'List of entities: %s'
-                        % ', '.join(self.contexts[0].data.keys())),
-                    filename=self.filename)
+            if len(pollution) > 3:
+                for name in pollution:
+                    location = context[name].location
+                    self.warning(
+                        err_id=('testcases_javascript_traverser', 'run',
+                                'namespace_pollution'),
+                        warning='JavaScript namespace pollution',
+                        description=(
+                            'Your add-on contains a large number of global '
+                            'variables, which may conflict with other '
+                            'add-ons. For more information, see '
+                            'http://blog.mozilla.com/addons/2009/01/16/'
+                            'firefox-extensions-global-namespace-pollution/'
+                            ', or use JavaScript modules.',
+                            'Variable name: %s' % name),
+                        filename=location[0],
+                        line=location[1],
+                        position=location[2])
 
     def wrap(self, value=Sentinel, **kw):
         """Wraps the given value in a JSWrapper and JSValue, as appropriate,
@@ -207,10 +203,6 @@ class Traverser(object):
                     else:
                         self.traverse(node, branch)
 
-        # WithStatements declare two blocks: one for the block and one for
-        # the object that's being withed. We need both because of `let`s.
-        if node['type'] == 'WithStatement':
-            self._pop_context()
         if pushed_context:
             self._pop_context()
 
@@ -228,20 +220,15 @@ class Traverser(object):
             self._push_context()
             return True
         elif node.is_block:
-            self._push_block_context()
+            self._push_context(context_type='block')
             return True
 
-    def _push_block_context(self):
-        'Adds a block context to the current interpretation frame'
+    def _push_context(self, context=None, context_type='default'):
+        """Push a lexical context onto the scope stack."""
 
-        self.contexts.append(JSContext('block', traverser=self))
-
-    def _push_context(self, default=None):
-        'Adds a variable context to the current interpretation frame'
-
-        if default is None:
-            default = JSContext('default', traverser=self)
-        self.contexts.append(default)
+        if context is None:
+            context = JSContext(context_type, traverser=self)
+        self.contexts.append(context)
 
     def _pop_context(self):
         'Adds a variable context to the current interpretation frame'
@@ -249,47 +236,9 @@ class Traverser(object):
         assert len(self.contexts) > 1
         self.contexts.pop()
 
-    def _peek_context(self, depth=1):
-        """Returns the most recent context. Note that this should NOT be used
-        for variable lookups."""
-
-        return self.contexts[len(self.contexts) - depth]
-
-    def _seek_variable(self, variable):
-        'Returns the value of a variable that has been declared in a context'
-
-        # Look for the variable in the local contexts first
-        local_variable = self._seek_local_variable(variable)
-        if local_variable is not None:
-            return local_variable
-
-        # Seek in globals for the variable instead.
-        if self._is_global(variable):
-            return self._build_global(variable, GLOBAL_ENTITIES[variable])
-
-        self.debug('SEEK_GLOBAL>>FAILED')
-        # If we can't find a variable, we always return a dummy object.
-        return self.wrap(dirty='SeekVariableNotFound')
-
-    def _is_defined(self, variable):
-        return variable in GLOBAL_ENTITIES or self._is_local_variable(variable)
-
-    def _is_local_variable(self, variable):
-        """Return whether a variable is defined in the current scope."""
-        return any(ctx.has_var(variable) for ctx in self.contexts)
-
-    def _seek_local_variable(self, variable):
-        # Loop through each context in reverse order looking for the defined
-        # variable.
-        for context in reversed(self.contexts):
-            # If it has the variable, return it.
-            if context.has_var(variable):
-                self.debug('SEEK>>FOUND')
-                return context.get(variable)
-
-    def _is_global(self, name):
+    def is_global(self, name):
         'Returns whether a name is a global entity'
-        return not self._is_local_variable(name) and name in GLOBAL_ENTITIES
+        return name in GLOBAL_ENTITIES and not self.find_variable(name)
 
     def _build_global(self, name, entity):
         'Builds an object based on an entity from the predefined entity list'
@@ -325,26 +274,50 @@ class Traverser(object):
 
         return result
 
-    def _declare_variable(self, name, value, type_='var'):
-        context = None
+    def find_scope(self, scope_type, starting_at=0):
+        """Find the closest scope of the given type."""
+        for scope in islice(reversed(self.contexts), starting_at, None):
+            if scope.context_type == scope_type:
+                return scope
+        return self.contexts[0]
+
+    def find_variable(self, identifier, scope_type=None, starting_at=0):
+        """Find the variable with the given identifier in the nearest
+        scope. If `scope_type` is given, the nearest scope of that type is
+        returned unless the variable is found in a nearer scope of a different
+        type."""
+        for scope in islice(reversed(self.contexts), starting_at, None):
+            if scope.context_type == scope_type or scope.has_var(identifier):
+                return scope
+
+        if scope_type:
+            return self.contexts[0]
+
+    def get_variable(self, identifier, instantiate):
+        """Return the wrapper for the variable with the given identifier,
+        in the nearest scope in which it exists. If it desn't exist, a dirty
+        wrapper is returned."""
+
+        scope = self.find_variable(identifier, scope_type='global')
+        if identifier in scope:
+            return scope.get(identifier)
+
+        if identifier in GLOBAL_ENTITIES:
+            return self._build_global(identifier, GLOBAL_ENTITIES[identifier])
+
+        return scope.get(identifier, instantiate=instantiate)
+
+    def declare_variable(self, name, value, type_='var'):
         if type_ in ('var', 'const', ):
-            for ctxt in reversed(self.contexts):
-                if ctxt.context_type == 'default':
-                    context = ctxt
-                    break
+            context = self.find_scope('default')
         elif type_ == 'let':
-            context = self.contexts[-1]
-        elif type_ == 'glob':
+            context = self.find_scope('block')
+        else:
+            assert type_ == 'global'
             # Look down through the lexical scope. If the variable being
             # assigned is present in one of those objects, use that as the
             # target context.
-            for ctx in reversed(self.contexts[1:]):
-                if ctx.has_var(name):
-                    context = ctx
-                    break
-
-        if not context:
-            context = self.contexts[0]
+            context = self.find_variable(name, scope_type='global')
 
         context.set(name, value)
         return value

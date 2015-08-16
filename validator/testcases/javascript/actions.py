@@ -8,7 +8,7 @@ from validator.constants import (BUGZILLA_BUG, DESCRIPTION_TYPES, FENNEC_GUID,
                                  FIREFOX_GUID, MAX_STR_SIZE)
 from validator.decorator import version_range
 from validator.testcases.regex import validate_string
-from jstypes import JSArray, JSContext, JSObject, JSWrapper, Undefined
+from jstypes import JSArray, JSObject, JSWrapper, Undefined
 
 
 NUMERIC_TYPES = (int, long, float, complex)
@@ -292,7 +292,7 @@ def _expand_globals(traverser, node):
     return node
 
 
-def trace_member(traverser, node, instantiate=False):
+def trace_member(traverser, node, instantiate=True):
     'Traces a MemberExpression and returns the appropriate object'
     traverser.debug('trace_member {node[type]} {object} {instantiate}',
                     node=node, object=node.get('object'),
@@ -332,17 +332,7 @@ def trace_member(traverser, node, instantiate=False):
         return output
 
     elif node['type'] == 'Identifier':
-        test_identifier(traverser, node['name'])
-
-        # If we're supposed to instantiate the object and it doesn't already
-        # exist, instantitate the object.
-        if instantiate and not traverser._is_defined(node['name']):
-            output = traverser.wrap()
-            traverser.contexts[0].set(node['name'], output)
-        else:
-            output = traverser._seek_variable(node['name'])
-
-        return _expand_globals(traverser, output)
+        return _ident(traverser, node, instantiate)
 
     else:
         # It's an expression, so just try your damndest.
@@ -364,6 +354,12 @@ def test_identifier(traverser, name):
             context=traverser.context)
 
 
+def _catch(traverser, node):
+    if node['param']['type'] == 'Identifier':
+        name = node['param']['name']
+        traverser.contexts[-1].set(name, JSObject())
+
+
 def _function(traverser, node):
     'Prevents code duplication'
     # Oh? How is that, exactly?
@@ -372,12 +368,8 @@ def _function(traverser, node):
 
         traverser.function_collection.append([])
 
-        # Replace the current context with a prototypeable JS object.
-        context = JSContext('default', traverser=traverser)
-        traverser._push_context(context)
-
-        # Huh what? That is not how `this` works at all.
-        traverser.this_stack.append(context)  # Allow references to "this"
+        traverser._push_context()
+        traverser.this_stack.append(traverser.wrap(const=True))
 
         try:
             # Declare parameters in the local scope
@@ -392,7 +384,7 @@ def _function(traverser, node):
                             continue
                         params.append(element['name'])
 
-            local_context = traverser._peek_context(1)
+            local_context = traverser.contexts[-1]
             for param in params:
                 var = traverser.wrap(dirty='Param')
 
@@ -405,8 +397,6 @@ def _function(traverser, node):
             traverser.traverse(node, 'body')
 
         finally:
-            # Since we need to manually manage the "this" stack, pop off that
-            # context.
             traverser.this_stack.pop()
             traverser._pop_context()
 
@@ -423,9 +413,12 @@ def _function(traverser, node):
 
 
 def _define_function(traverser, node):
-    me = _function(traverser, node)
-    traverser._peek_context(2).set(node['id']['name'], me)
-    return me
+    name = node['id']['name']
+    wrapper = _function(traverser, node)
+
+    scope = traverser.find_variable(name, scope_type='default', starting_at=1)
+    scope.set(name, wrapper)
+    return wrapper
 
 
 def _func_expr(traverser, node):
@@ -435,14 +428,22 @@ def _func_expr(traverser, node):
 
 
 def _define_with(traverser, node):
-    'Handles `with` statements'
+    """Traverse a `with` statement."""
 
     object_ = traverser.traverse(node, 'object')
 
-    if isinstance(object_, JSWrapper) and isinstance(object_.value, JSObject):
-        traverser.contexts[-1] = object_.value
-        traverser.contexts.append(JSContext('block'))
-    return
+    # Push the target object as a context, and then push an additional block
+    # context for any `let` variables declared within the body.
+    traverser._push_context(object_.value)
+    traverser._push_context(context_type='block')
+
+    traverser.traverse(node, 'body')
+
+    traverser._pop_context()
+    traverser._pop_context()
+
+    # Prevent our body from being re-traversed.
+    return traverser.wrap()
 
 
 def _define_var(traverser, node):
@@ -473,14 +474,14 @@ def _define_var(traverser, node):
                 for var in vars:
                     if not var:
                         continue
-                    traverser._declare_variable(var, None)
+                    traverser.declare_variable(var, None)
 
             # The variables are declared inline
             elif declaration['init']['type'] == 'ArrayPattern':
                 # TODO : Test to make sure len(values) == len(vars)
                 for value in declaration['init']['elements']:
                     if vars[0]:
-                        traverser._declare_variable(
+                        traverser.declare_variable(
                             vars[0], traverser.traverse(value))
                     vars = vars[1:]  # Pop off the first value
 
@@ -490,7 +491,7 @@ def _define_var(traverser, node):
                 assigner = traverser.traverse(declaration, 'init')
                 for value in assigner.value.elements:
                     if vars[0]:
-                        traverser._declare_variable(vars[0], value)
+                        traverser.declare_variable(vars[0], value)
                     vars = vars[1:]
 
         elif declaration['id']['type'] == 'ObjectPattern':
@@ -508,7 +509,7 @@ def _define_var(traverser, node):
                         continue
 
                     if prop['value']['type'] == 'Identifier':
-                        traverser._declare_variable(
+                        traverser.declare_variable(
                             prop['value']['name'], init_obj.get(prop_name))
 
                     elif prop['value']['type'] == 'ObjectPattern':
@@ -529,7 +530,7 @@ def _define_var(traverser, node):
                 var = var_value
                 var.const = kind == 'const'
 
-            traverser._declare_variable(var_name, var, type_=kind)
+            traverser.declare_variable(var_name, var, type_=kind)
 
     if 'body' in node:
         traverser.traverse(node, 'body')
@@ -743,7 +744,7 @@ def _new(traverser, node):
     return elem
 
 
-def _ident(traverser, node):
+def _ident(traverser, node, instantiate=True):
     'Initiates an object lookup on the traverser based on an identifier token'
 
     name = node['name']
@@ -751,10 +752,7 @@ def _ident(traverser, node):
     # Ban bits like "newThread"
     test_identifier(traverser, name)
 
-    if traverser._is_defined(name):
-        return traverser._seek_variable(name)
-
-    return traverser.wrap(dirty='UnknownIdentifier')
+    return traverser.get_variable(name, instantiate)
 
 
 def _expr_assignment(traverser, node):
@@ -776,7 +774,7 @@ def _expr_assignment(traverser, node):
         if node_left['type'] == 'Identifier':
             # Identifiers just need the ID name and a value to push.
             # Raise a global overwrite issue if the identifier is global.
-            global_overwrite = traverser._is_global(node_left['name'])
+            global_overwrite = traverser.is_global(node_left['name'])
 
             # Get the readonly attribute and store its value if is global.
             if global_overwrite:
@@ -784,8 +782,8 @@ def _expr_assignment(traverser, node):
                 if 'readonly' in global_dict:
                     readonly_value = global_dict['readonly']
 
-            left = traverser._declare_variable(node_left['name'],
-                                               right, type_='glob')
+            left = traverser.declare_variable(node_left['name'],
+                                              right, type_='global')
 
         elif node_left['type'] == 'MemberExpression':
             left = trace_member(traverser, node_left['object'],

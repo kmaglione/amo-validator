@@ -17,31 +17,31 @@ def test_pollution():
     d = "foo";
     """, ignore_pollution=False).failed()
 
-
-def test_pollution_jsm():
-    """
-    Make sure that JSM files don't have to worry about namespace pollution.
-    """
-
-    assert not _do_test_raw("""
-    a = "foo";
-    b = "foo";
-    c = "foo";
-    d = "foo";
-    """, path='foo.jsm', ignore_pollution=False).failed()
+    assert _do_test_raw("""
+    function a() {}
+    function b() {}
+    function c() {}
+    function d() {}
+    """, ignore_pollution=False).failed()
 
 
-def test_pollution_components():
-    """
-    Test that the components/ directory is ignored for pollution.
-    """
+def test_inferred_variables():
+    """Test that variables which are inferred to exist are present in the
+    global scope but not flagged as pollution."""
 
-    assert not _do_test_raw("""
-    a = "foo";
-    b = "foo";
-    c = "foo";
-    d = "foo";
-    """, path='components/foo.jsm', ignore_pollution=False).failed()
+    err = _do_test_raw("""
+        (function () {
+            var a = foo;
+            bar.bax;
+            baz(quux);
+            thing[hello];
+        });
+    """, ignore_pollution=False)
+
+    print err.final_context.keys()
+    assert ({'foo', 'bar', 'baz', 'quux', 'thing', 'hello'} <=
+            set(err.final_context.keys()))
+    assert not err.failed()
 
 
 def test_pollution_exceptions():
@@ -84,8 +84,9 @@ def test_pollution_jetpack_bootstrap():
 
 def test_pollution_implicit_from_fun():
     """
-    Make sure that implicit variable declarations from within functions are caught.
-    Missing a var/let will implicitly declare the variable within the global scope.
+    Make sure that implicit variable declarations from within functions are
+    caught. Missing a var/let will implicitly declare the variable within the
+    global scope.
     """
 
     assert not _do_test_raw("""
@@ -105,4 +106,3 @@ def test_pollution_implicit_from_fun():
         d = "foo";
     })();
     """, ignore_pollution=False).failed()
-

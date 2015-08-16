@@ -34,9 +34,9 @@ def test_js_file(err, filename, data, line=0, context=None, pollutable=False):
         context = ContextGenerator(data)
 
     t = traverser.Traverser(err, filename, line, context=context,
+                            pollutable=pollutable,
                             is_jsm=(filename.endswith('.jsm') or
                                     'EXPORTED_SYMBOLS' in data))
-    t.pollutable = pollutable
     t.run(tree)
 
     # Reset the tier so we don't break the world
