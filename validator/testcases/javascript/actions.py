@@ -269,8 +269,7 @@ def _get_member_exp_property(traverser, node):
     if node['property']['type'] == 'Identifier' and not node.get('computed'):
         return unicode(node['property']['name'])
     else:
-        eval_exp = traverser.traverse(node, 'property')
-        return eval_exp.as_str()
+        return traverser.traverse(node, 'property').as_identifier()
 
 
 def _expand_globals(traverser, node):
@@ -667,6 +666,7 @@ def _call_expression(traverser, node):
 
             traverser.warning(**kwargs)
 
+    result = None
     if (node['callee']['type'] == 'MemberExpression' and
             node['callee']['property']['type'] == 'Identifier'):
 
@@ -878,7 +878,12 @@ def _expr_binary(traverser, node):
 def _binary_op(operator, left, right, traverser):
     """Perform a binary operation on two pre-traversed nodes."""
 
-    value = traverser.binary_ops[operator](left, right)
+    if operator in ('==', '===', '!=', '!=='):
+        # Special case equality operators to compare wrapper values, which
+        # might have annotated values if they're dirty.
+        value = traverser.binary_ops[operator](left, right)
+    else:
+        value = traverser.binary_ops[operator](left.value, right.value)
 
     if isinstance(value, basestring):
         value = value[:MAX_STR_SIZE]

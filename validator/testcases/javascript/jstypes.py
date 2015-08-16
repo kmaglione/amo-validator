@@ -27,7 +27,12 @@ Undefined = Undefined()
 class JSValue(object):
     """Base type for all JavaScript values."""
 
+    OBJECT_COUNT = 0
+
     def __init__(self, traverser=None):
+        self.object_id = JSValue.OBJECT_COUNT
+        JSValue.OBJECT_COUNT += 1
+
         self.traverser = traverser
 
     def is_literal(self):
@@ -104,6 +109,10 @@ class JSValue(object):
             pass
 
         return float('nan')
+
+    def as_identifier(self):
+        """Return our value as a string, to be used in identifier look-ups."""
+        return self.as_str()
 
     def as_str(self):
         """Return our value as a string."""
@@ -316,7 +325,6 @@ class JSWrapper(object):
     @value.setter
     def value(self, value):
         self._value = value
-        return value
 
     def is_callable(self):
         return self.callable or ('return' in self.hooks and
@@ -330,7 +338,10 @@ class JSWrapper(object):
         return self.value.typeof()
 
     def as_primitive(self):
-        return self.value.as_primitive()
+        val = self.value.as_primitive()
+        if self.dirty and isinstance(val, basestring):
+            return self.as_str()
+        return val
 
     def as_bool(self):
         return self.value.as_bool()
@@ -342,7 +353,19 @@ class JSWrapper(object):
         return self.value.as_float()
 
     def as_str(self):
-        return self.value.as_str()
+        val = self.value.as_str()
+        if self.dirty:
+            # For dirty values, append the value's unique ID, to prevent
+            # different dirty values from matching the same object properties
+            # or comparing equal.
+            return u'{value}<dirty:{id:x}>'.format(
+                value=val, id=self.value.object_id)
+        return val
+
+    def as_identifier(self):
+        if self.dirty:
+            return self.as_str()
+        return self.value.as_identifier()
 
     def set_value(self, value, overwrite_const=False, lazy=False):
         """Assigns a value to the wrapper"""
@@ -408,6 +431,7 @@ class JSWrapper(object):
             value = JSObject()
 
         value.traverser = self.traverser
+
         self.value = value
         return value
 
