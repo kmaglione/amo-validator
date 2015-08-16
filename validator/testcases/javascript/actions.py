@@ -394,7 +394,7 @@ def _function(traverser, node):
 
             local_context = traverser._peek_context(1)
             for param in params:
-                var = traverser.wrap(dirty=True)
+                var = traverser.wrap(dirty='Param')
 
                 # We can assume that the params are static because we don't
                 # care about what calls the function. We want to know whether
@@ -419,7 +419,7 @@ def _function(traverser, node):
     # Put the function off for traversal at the end of the current block scope.
     traverser.function_collection[-1].append(partial(wrap, traverser, node))
 
-    return traverser.wrap(callable=True, dirty=True)
+    return traverser.wrap(callable=True)
 
 
 def _define_function(traverser, node):
@@ -598,7 +598,7 @@ def _define_literal(traverser, node):
     """
     value = node['value']
     if isinstance(value, dict):
-        return traverser.wrap(dirty=True)
+        return traverser.wrap(dirty='LiteralDict')
 
     wrapper = traverser.wrap(value)
     if isinstance(value, basestring):
@@ -686,7 +686,7 @@ def _call_expression(traverser, node):
     if result is not None:
         return traverser.wrap(result)
 
-    return traverser.wrap(dirty=True)
+    return traverser.wrap(dirty='CallExpression')
 
 
 def _readonly_top(left, right):
@@ -754,7 +754,7 @@ def _ident(traverser, node):
     if traverser._is_defined(name):
         return traverser._seek_variable(name)
 
-    return traverser.wrap(dirty=True)
+    return traverser.wrap(dirty='UnknownIdentifier')
 
 
 def _expr_assignment(traverser, node):

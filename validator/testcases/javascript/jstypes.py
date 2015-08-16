@@ -202,7 +202,7 @@ class JSObject(JSValue):
             if callable(output):
                 output = output()
         elif instantiate:
-            output = self.traverser.wrap(dirty=True)
+            output = self.traverser.wrap(dirty='GetInstantiate')
             self.set(name, output)
 
         modifier = instanceproperties.get_operation('get', name)
@@ -210,7 +210,7 @@ class JSObject(JSValue):
             modifier(self, name)
 
         if output is None:
-            return self.traverser.wrap(dirty=True)
+            return self.traverser.wrap(dirty='GetInstantiate2')
         if not isinstance(output, JSWrapper):
             output = self.traverser.wrap(output)
         return output
@@ -419,6 +419,7 @@ class JSWrapper(object):
             value = JSLiteral(value, traverser=self.traverser)
         # If the value being assigned is a wrapper as well, copy it in
         elif isinstance(value, JSWrapper):
+            self.callable = value.callable
             self.value = value.value
             self.dirty = value.dirty
             self.hooks = value.hooks
@@ -483,7 +484,7 @@ class JSWrapper(object):
 
         if not isinstance(output, JSWrapper):
             if output is None:
-                output = traverser.wrap(dirty=True)
+                output = traverser.wrap(dirty='WrapperGet')
             else:
                 output = traverser.wrap(output, dirty=dirty)
 

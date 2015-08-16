@@ -141,7 +141,7 @@ class Traverser(object):
             node = node[branch]
 
         if node is None:
-            return self.wrap(dirty=True)
+            return self.wrap(dirty='TraverseNone')
 
         if isinstance(node, types.StringTypes):
             return self.wrap(node)
@@ -177,7 +177,7 @@ class Traverser(object):
 
                 self.err.metadata[key][node['type']] += 1
 
-            return self.wrap(dirty=True)
+            return self.wrap(dirty='TraverseUnknown')
 
         # Extract properties about the node that we're traversing
         node_def = DEFINITIONS[node['type']]
@@ -216,10 +216,12 @@ class Traverser(object):
 
         # If there is an action and the action returned a value, it should be
         # returned to the node traversal that initiated this node's traversal.
-        if node_def.returns and action_result is not None:
-            return action_result
+        if node_def.returns:
+            if action_result is not None:
+                return action_result
+            return self.wrap(dirty='NoReturn')
 
-        return self.wrap(dirty=True)
+        return self.wrap(dirty='TraverseDefault')
 
     def push_context(self, node):
         if node.dynamic:
@@ -231,6 +233,7 @@ class Traverser(object):
 
     def _push_block_context(self):
         'Adds a block context to the current interpretation frame'
+
         self.contexts.append(JSContext('block', traverser=self))
 
     def _push_context(self, default=None):
@@ -266,7 +269,7 @@ class Traverser(object):
 
         self.debug('SEEK_GLOBAL>>FAILED')
         # If we can't find a variable, we always return a dummy object.
-        return self.wrap()
+        return self.wrap(dirty='SeekVariableNotFound')
 
     def _is_defined(self, variable):
         return variable in GLOBAL_ENTITIES or self._is_local_variable(variable)
