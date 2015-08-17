@@ -53,19 +53,6 @@ def test_dom_mutation_fail():
     assert _do_test_raw('foo.DOMAttrModified = bar;').failed()
 
 
-def test_bug_548645():
-    'Tests that banned entities are disallowed'
-
-    results = _do_test_raw("""
-    var y = newThread;
-    var x = foo.newThread;
-    var w = foo["newThread"];
-    """)
-    print results.print_summary(verbose=True)
-    assert (len(results.errors) + len(results.warnings) +
-            len(results.notices)) == 3
-
-
 def test_processNextEvent_banned():
     """Test that processNextEvent is properly banned."""
 

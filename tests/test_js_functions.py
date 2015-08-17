@@ -68,7 +68,8 @@ def test_enablePrivilege():
     assert err.warnings
 
     eq_(err.warnings[0]['id'],
-        ('js', 'traverser', 'dangerous_global'))
+        ('jstypes', 'hook_on_call',
+         'netscape.security.PrivilegeManager.enablePrivilege'))
     eq_(err.warnings[0]['signing_severity'], 'high')
 
 def test_privileged_unprivileged_interaction():
@@ -82,7 +83,8 @@ def test_privileged_unprivileged_interaction():
         assert err.warnings
 
         eq_(err.warnings[0]['id'],
-            ('js', 'traverser', 'dangerous_global'))
+            ('jstypes', 'hook_on_call', 'Components.utils.%s' % meth))
+
         eq_(err.warnings[0]['signing_severity'], 'low')
 
     for form in ('var obj = { __exposedProps__: {} };',

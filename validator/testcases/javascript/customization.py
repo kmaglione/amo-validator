@@ -1,5 +1,7 @@
+from __future__ import absolute_import, print_function, unicode_literals
+
 from ..regex.generic import FILE_REGEXPS, strip_whitespace
-from .predefinedentities import INTERFACES
+from .jstypes import Interfaces
 from .preferences import BANNED_PREF_BRANCHES
 
 
@@ -45,14 +47,14 @@ SEARCH_PREF_MESSAGE = {
 
 BANNED_PREF_BRANCHES.extend([
     # Search, homepage, and customization preferences
-    (u'browser.newtab.url', CUSTOMIZATION_PREF_MESSAGE),
-    (u'browser.newtabpage.enabled', CUSTOMIZATION_PREF_MESSAGE),
-    (u'browser.search.defaultenginename', SEARCH_PREF_MESSAGE),
-    (u'browser.search.searchEnginesURL', SEARCH_PREF_MESSAGE),
-    (u'browser.startup.homepage', CUSTOMIZATION_PREF_MESSAGE),
-    (u'extensions.getMoreThemesURL', None),
-    (u'keyword.URL', SEARCH_PREF_MESSAGE),
-    (u'keyword.enabled', SEARCH_PREF_MESSAGE),
+    ('browser.newtab.url', CUSTOMIZATION_PREF_MESSAGE),
+    ('browser.newtabpage.enabled', CUSTOMIZATION_PREF_MESSAGE),
+    ('browser.search.defaultenginename', SEARCH_PREF_MESSAGE),
+    ('browser.search.searchEnginesURL', SEARCH_PREF_MESSAGE),
+    ('browser.startup.homepage', CUSTOMIZATION_PREF_MESSAGE),
+    ('extensions.getMoreThemesURL', None),
+    ('keyword.URL', SEARCH_PREF_MESSAGE),
+    ('keyword.enabled', SEARCH_PREF_MESSAGE),
 ])
 
 SEARCH_MESSAGE = 'Potentially dangerous use of the search service'
@@ -78,21 +80,13 @@ def search_warning(severity='medium', editors_only=False,
             'warning': message,
             'description': description}
 
-INTERFACES.update({
-    u'nsIBrowserSearchService':
-        {'value':
-            {u'currentEngine':
-                {'readonly': search_warning(severity='high')},
-             u'defaultEngine':
-                {'readonly': search_warning(severity='high')},
-             u'addEngine':
-                {'dangerous': search_warning()},
-             u'addEngineWithDetails':
-                {'dangerous': search_warning()},
-             u'removeEngine':
-                {'dangerous': search_warning()},
-             u'moveEngine':
-                {'dangerous': search_warning()}}},
+Interfaces.hook('nsIBrowserSearchService', {
+    'currentEngine': {'on_set': search_warning(severity='high')},
+    'defaultEngine': {'on_set': search_warning(severity='high')},
+    'addEngine': {'on_get': search_warning()},
+    'addEngineWithDetails': {'on_get': search_warning()},
+    'removeEngine': {'on_get': search_warning()},
+    'moveEngine': {'on_get': search_warning()},
 })
 
 FILE_REGEXPS.append(

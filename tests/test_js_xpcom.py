@@ -1,6 +1,9 @@
-from nose.tools import eq_
+import pytest
 
-from js_helper import _do_test_raw, _do_real_test_raw, TestCase
+from js_helper import _do_test_raw, TestCase
+
+
+parametrize = pytest.mark.parametrize
 
 
 def test_xmlhttprequest():
@@ -15,7 +18,7 @@ def test_xmlhttprequest():
 
     wrapper = err.final_context.get('req')
 
-    assert 'open' in wrapper.hooks['value']
+    assert 'open' in wrapper.value.hooks['properties']
 
 
 def test_nsiaccessibleretrieval():
@@ -25,13 +28,13 @@ def test_nsiaccessibleretrieval():
     var c = Components.classes[""].createInstance(
         Components.interfaces.nsIAccessibleRetrievalWhatever);
     """)
-    eq_(len(err.warnings), 0)
+    assert len(err.warnings) == 0
 
     err = _do_test_raw("""
     var c = Components.classes[""].createInstance(
         Components.interfaces.nsIAccessibleRetrieval);
     """)
-    eq_(len(err.warnings), 1)
+    assert len(err.warnings) == 1
 
 
 def test_evalinsandbox():
@@ -55,6 +58,7 @@ def test_evalinsandbox():
     """)
     assert err.failed()
 
+
 def test_getinterface():
     """Test the functionality of the getInterface method."""
 
@@ -62,6 +66,7 @@ def test_getinterface():
         obj.getInterface(Components.interfaces.nsIXMLHttpRequest)
            .open("GET", "foo", false);
     """).failed()
+
 
 def test_queryinterface():
     """Test the functionality of the QueryInterface method."""
@@ -117,6 +122,7 @@ def test_queryinterface():
             obj.foo.open("GET", "foo", false);
         """).failed()
 
+
 def test_overwritability():
     """Test that XPCOM globals can be overwritten."""
 
@@ -154,32 +160,39 @@ def test_xpcom_shortcut_ci():
                          .getService(Ci.nsIWindowMediator);
     item.registerNotification();
     """, bootstrap=True)
-    eq_(len(err.warnings), 1)
+    assert len(err.warnings) == 1
 
     err = _do_test_raw("""
     var item = Components.classes["@mozilla.org/windowmediator;1"]
                          .getService(Ci.nsIWindowMediator);
     item.registerNotification();
     """, bootstrap=False)
-    eq_(len(err.warnings), 0)
+    assert len(err.warnings) == 0
 
 
 def test_xpcom_shortcut_cc():
     """Test the Components.classes shortcut."""
 
     err = _do_test_raw("""
+    var item = Components.classes["@mozilla.org/windowmediator;1"]
+                   .getService(Components.interfaces.nsIWindowMediator);
+    item.registerNotification();
+    """, bootstrap=True)
+    assert len(err.warnings) == 1
+
+    err = _do_test_raw("""
     var item = Cc["@mozilla.org/windowmediator;1"]
                    .getService(Components.interfaces.nsIWindowMediator);
     item.registerNotification();
     """, bootstrap=True)
-    eq_(len(err.warnings), 1)
+    assert len(err.warnings) == 1
 
     err = _do_test_raw("""
     var item = Cc["@mozilla.org/windowmediator;1"]
                    .getService(Components.interfaces.nsIWindowMediator);
     item.registerNotification();
     """, bootstrap=False)
-    eq_(len(err.warnings), 0)
+    assert len(err.warnings) == 0
 
 
 def test_xpcom_shortcut_services_wm():
@@ -188,6 +201,7 @@ def test_xpcom_shortcut_services_wm():
     _test_when_bootstrapped("""
     Services.wm.registerNotification();
     """)
+
 
 def test_xpcom_shortcut_services_ww():
     """Test that Services.ww throws a warning when bootstrapped."""
@@ -250,7 +264,7 @@ def test_xpcom_nsiwebbrowserpersist():
         err = _do_test_raw(js)
         if err.warnings:
             result = err.warnings[0]['id'][-1] != 'webbrowserpersist_saveuri'
-            eq_(result, want_pass)
+            assert result == want_pass
         else:
             assert want_pass
 
@@ -271,12 +285,11 @@ def test_xpcom_nsiwebbrowserpersist():
     """, True)
 
 
-
 def test_xpcom_nsiwebbrowserpersist_deprecation():
     """Tests that nsIWebBrowserPersist emits deprecation warnings."""
 
     assert _do_test_raw("""
-    thing.QueryInterface(Ci.nsIWebBrowserPersist).saveChannel()
+    thing.QueryInterface(Components.interfaces.nsIWebBrowserPersist).saveChannel()
     """).failed()
 
     assert _do_test_raw("""
@@ -317,25 +330,18 @@ class TestnsIWindowWatcher(TestCase):
         """)
         self.assert_notices()
 
-    def test_openWindow(self):
+    @parametrize('uri', ('http://foo/bar/',
+                         'https://foo/bar/',
+                         'ftp://foo/bar/',
+                         'data:asdf'))
+    def test_openWindow(self, uri):
         """
         Test that `foo.openWindow("<remote url>")` throws an error where
         <remote url> is a non-chrome, non-relative URL.
         """
 
-        def test_uri(self, uri):
-            self.setUp()
-            self.setup_err()
-            self._run_against_foo('foo.openWindow("%s")' % uri)
-            self.assert_failed(with_warnings=True)
-
-
-        uris = ['http://foo/bar/',
-                'https://foo/bar/',
-                'ftp://foo/bar/',
-                'data:asdf']
-        for uri in uris:
-            yield test_uri, self, uri
+        self._run_against_foo('foo.openWindow("%s")' % uri)
+        self.assert_failed(with_warnings=True)
 
 
 def test_nsITransferable_init():

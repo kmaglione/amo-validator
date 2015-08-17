@@ -1,29 +1,34 @@
+from __future__ import absolute_import, print_function, unicode_literals
+
 import re
-from copy import deepcopy
 from functools import partial, wraps
+from weakref import WeakSet
 
-# Global import of predefinedentities will cause an import loop
-import instanceactions
-from validator.constants import (BUGZILLA_BUG, DESCRIPTION_TYPES, FENNEC_GUID,
-                                 FIREFOX_GUID, MAX_STR_SIZE)
-from validator.decorator import version_range
-from validator.testcases.regex import validate_string
-from jstypes import JSArray, JSObject, JSWrapper, Undefined
+from validator.constants import MAX_STR_SIZE
+
+from ..regex import validate_string
+from .jstypes import Args, JSArray, JSContext, JSObject, Undefined
 
 
-NUMERIC_TYPES = (int, long, float, complex)
-
-
-def clean_dirty(wrapper):
-    """If the given wrapper is dirty, and has a string value, clean up repeated
-    occurrences of '[object Object]."""
-    if (wrapper.dirty and wrapper.is_literal() and
-            isinstance(wrapper.as_primitive(), basestring)):
-        wrapper.value.value = re.sub(r'(?:\[object Object]){2,}',
-                                     '[object Object]', wrapper.value.value)
+def clean_dirty(value):
+    """Given a dirty literal string, clean up repeated occurrences of
+    '[object Object]."""
+    return re.sub(r'(?:\[object Object]){2,}', '[object Object]', value)
 
 
 def operator(op):
+    """Mark the decorated function as a handler for the given operator, `op`.
+    When applied to a method of an `Operators` subclass, the method is added
+    to the operators dict for instances of the class:
+
+        class BinOps(Operators):
+            @operator('+')
+            def add(self, a, b):
+                pass
+
+        bin_ops = BinOps()
+        assert bin_ops['+'] is bin_ops.add
+    """
     def decorator(fn):
         fn.operator = op
         return fn
@@ -43,7 +48,17 @@ def relational_operator(op):
     return decorator
 
 
-class Operators(object):
+def node_handler(fn):
+    """Mark a method of an Operators subclass as a handler for the JavaScript
+    parse node of the same name."""
+    fn.operator = fn.__name__
+    return fn
+
+
+class Operators(dict):
+    """Acts as a look-up table for arbitrary operators, mapping them to the
+    appropriate instance methods. See @operator for more details."""
+
     class __metaclass__(type):
         def __new__(mcls, name, bases, dict_):
             cls = type.__new__(mcls, name, bases, dict_)
@@ -52,17 +67,19 @@ class Operators(object):
                              if getattr(method, 'operator', None)}
             return cls
 
+    def __new__(cls, *args, **kw):
+        self = super(Operators, cls).__new__(cls, *args, **kw)
+        for op, method in cls.OPERATORS.iteritems():
+            self[op] = getattr(self, method)
+        return self
+
     def __init__(self, traverser):
         self.traverser = traverser
 
-    def __getitem__(self, operator):
-        return getattr(self, self.OPERATORS[operator])
-
-    def __contains__(self, operator):
-        return operator in self.OPERATORS
-
 
 class BinaryOps(Operators):
+    """A look-up table for JavaScript binary operator handlers."""
+
     def relational_values(self, left, right):
         """Converts two JS values to the primitive types that JavaScript
         would use for relational operators."""
@@ -77,29 +94,27 @@ class BinaryOps(Operators):
     @operator('==')
     def equal(self, left, right):
         """Return true if values would compare equal in JavaScript."""
-        if left.typeof() == right.typeof():
+        if left.typeof == right.typeof:
             # The two values are of the same JS type. Use strict equality.
             return self.identical(left, right)
 
         # Because JavaScript:
 
-        number = (int, float, bool)
-
         # `x` and `y` per the ECMAScript spec.
         x = left.as_primitive()
         y = right.as_primitive()
 
-        if x in (None, Undefined) and y in (None, Undefined):
+        if x == y or x in (None, Undefined) and y in (None, Undefined):
             return True
 
+        number = (int, long, float, bool)
         if (isinstance(x, basestring) and isinstance(y, number) or
                 isinstance(y, basestring) and isinstance(x, number)):
             # One string and one number. Coerce both to numbers.
             return left.as_float() == right.as_float()
 
         # Close enough.
-        return (left.as_primitive() == right.as_primitive() or
-                left.as_str() == right.as_str())
+        return left.as_str() == right.as_str()
 
     @operator('!=')
     def not_equal(self, left, right):
@@ -109,7 +124,7 @@ class BinaryOps(Operators):
     @operator('===')
     def identical(self, left, right):
         """Return true if values would compare as identical in JavaScript."""
-        if left.is_literal() and right.is_literal():
+        if left.is_literal and right.is_literal:
             return left.as_primitive() == right.as_primitive()
 
         return left.value is right.value
@@ -157,6 +172,7 @@ class BinaryOps(Operators):
     @operator('>>>')
     def logical_right_shift(self, left, right):
         """Logically bit-shift `left`, `right` places to the right."""
+        # This is wrong.
         return abs(left.as_int()) >> (right.as_int() & 0x7fffffff)
 
     @operator('+')
@@ -221,11 +237,13 @@ class BinaryOps(Operators):
     @operator('instanceof')
     def instanceof(self, left, right):
         """Return true if `left` is an instance of `right`."""
-        # FIXME(Kris): Treat instanceof the same as `QueryInterface`
+        left.query_interface(right)
         return False
 
 
 class UnaryOps(Operators):
+    """A look-up table for JavaScript unary operator handlers."""
+
     @operator('-')
     def minus(self, value):
         """Coerce value to a number and return its negative."""
@@ -254,655 +272,817 @@ class UnaryOps(Operators):
     @operator('typeof')
     def typeof(self, value):
         """Return the JavaScript type of `value`."""
-        return value.typeof()
+        return value.typeof
 
     @operator('delete')
-    def delete(self, value):
-        """Do nothing. Unary deletion is no longer supported in JavaScript,
-        except for object keys (which are handled elsewhere)."""
+    def delete(self, wrapper):
+        """Set a wrapper's value to `undefined`, but do not delete it"""
+        # If we actually delete the wrapper, we can't check its values
+        # across branches. Just set its value to undefined.
+        wrapper.set_value(Undefined, set_by='delete operator')
         return Undefined
 
 
-def _get_member_exp_property(traverser, node):
-    """Return the string value of a member expression's property."""
+class ObjectKeys(Operators):
+    """A look-up table for JavaScript parse nodes used to specify key names
+    in object literals. See `NodeHandlers.ObjectExpression` for usage."""
 
-    if node['property']['type'] == 'Identifier' and not node.get('computed'):
-        return unicode(node['property']['name'])
-    else:
-        return traverser.traverse(node, 'property').as_identifier()
+    @node_handler
+    def Identifier(self, node):
+        """Handle a property name specified as an identifier, which is coerced
+        into a literal:
+
+            var obj = {identifier: "value"};
+        """
+
+        return node['name']
+
+    @node_handler
+    def Literal(self, node):
+        """Handle a property name defined as a literal:
+
+            var obj = {"literal": "value", 42: value};
+        """
+
+        return node['value']
+
+    @node_handler
+    def ComputedName(self, node):
+        """Handle a property name computed from an arbitrary JavaScript
+        expression:
+
+            var obj = {[computed_name]: "value"};
+        """
+        return self.traverser.traverse(node, 'name').as_identifier()
 
 
-def _expand_globals(traverser, node):
-    """Expands a global object that has a lambda value."""
+class NodeHandlers(Operators):
+    """A look-up table for all JavaScript parse nodes, excluding those which
+    are handled specially. This is the core of our tree-walker, and is
+    responsible for handling every node in the parse tree.
 
-    if callable(node.hooks.get('value')):
-        result = node.hooks['value'](node)
+    Each handler must traverse all child nodes for the node it is handling,
+    adding and removing the correct entries to/from the context stack as it
+    does so."""
 
-        if isinstance(result, dict):
-            output = traverser._build_global('--', result)
-        elif isinstance(result, JSWrapper):
-            output = result
+    def __init__(self, traverser):
+        super(NodeHandlers, self).__init__(traverser)
+
+        self.binary_ops = BinaryOps(traverser)
+        self.unary_ops = UnaryOps(traverser)
+        self.object_keys = ObjectKeys(traverser)
+
+        self.traverse = traverser.traverse
+        self.find_scope = traverser.find_scope
+
+        self.ONE = self.traverser.wrap(1).value
+
+        traverser.conditionals = []
+
+        class Conditional(WeakSet):
+            def cleanup(self):
+                for wrapper in self:
+                    wrapper.dirty = 'ConditionalScopePop'
+
+                try:
+                    traverser.wrappers = traverser.conditionals[-2]
+                except IndexError:
+                    del traverser.wrappers
+        self.Conditional = Conditional
+
+        class PopContext(object):
+            """A context manager to pop the top entry from the context stack
+            on exit, and perform any cleanup that context requires if there
+            are no duplicates elsewhere in the stack."""
+
+            def __init__(self, stack):
+                self.stack = stack
+
+            def __enter__(self):
+                return self.stack[-1]
+
+            def __exit__(self, type_, value, traceback):
+                context = self.stack[-1]
+
+                # Thanks to the magic of `with` statements, we might
+                # have the same context in the stack multiple times.
+                if context not in self.stack[:-1]:
+                    if hasattr(context, 'cleanup'):
+                        context.cleanup()
+
+                self.stack.pop()
+
+        class PopConditional(PopContext):
+            """A context manager to pop the top entry from the conditional
+            stack on exit. This is exactly the same as `PopContext`, but
+            performs cleanup regardless of whether there are duplicate entries
+            for the element being popped."""
+
+            def __exit__(self, type_, value, traceback):
+                # The duplicate check above is non-trivially expensive,
+                # since sets will be compared by values, rather than strict
+                # identity.
+                self.stack[-1].cleanup()
+                self.stack.pop()
+
+        self._context_manager = PopContext(traverser.contexts)
+        self._conditional_manager = PopConditional(traverser.conditionals)
+
+    def assign_value(self, left, right, set_by='<unknown>'):
+        """Handle an assignment operation where the left-hand-side may be
+        either a simple L-value wrapper or a destructuring pattern."""
+
+        if isinstance(left, list):
+            # Array destructuring pattern.
+            for i, item in enumerate(left):
+                self.assign_value(item, right[i], set_by=set_by)
+        elif isinstance(left, dict):
+            # Object destructuring pattern.
+            for key, item in left.iteritems():
+                self.assign_value(item, right[key], set_by=set_by)
+        elif left is not None:
+            # Set the current location to the location of the wrapper
+            # we're currently assigning to, rather than the end of the
+            # current value.
+            self.traverser.set_location(left.parse_node)
+
+            left.set_value(right, set_by=set_by)
+
+    def binary_op(self, operator, left, right):
+        """Perform a binary operation on two values."""
+
+        if operator in ('==', '===', '!=', '!==', 'delete'):
+            # Special case: equality operators compare wrapper values, since
+            # they may annotate their coerced values to effect equality
+            # comparisons when they're dirty. Other operators need to operate
+            # on non-annotated values, for the moment, so that we don't get
+            # multiple <dirty> indicators in the final result.
+            #
+            # The delete operator needs to operate on a wrapper, since it
+            # changes its value.
+            value = self.binary_ops[operator](left, right)
         else:
-            output = traverser.wrap(result)
+            value = self.binary_ops[operator](left.value, right.value)
 
-        output.hooks.setdefault('value', {})
+        dirty = left.dirty or right.dirty
+        if isinstance(value, basestring):
+            value = value[:MAX_STR_SIZE]
+            if dirty:
+                value = clean_dirty(value)
 
-        return output
+        wrapper = self.traverser.wrap(value, dirty=dirty)
 
-    return node
+        # Test the newly-created literal for dangerous values.
+        # This may cause duplicate warnings for strings which
+        # already match a dangerous value prior to concatenation.
+        if not dirty and isinstance(value, basestring):
+            self.test_literal(value, wrapper)
 
+        return wrapper
 
-def trace_member(traverser, node, instantiate=True):
-    'Traces a MemberExpression and returns the appropriate object'
-    traverser.debug('trace_member {node[type]} {object} {instantiate}',
-                    node=node, object=node.get('object'),
-                    instantiate=instantiate)
+    def test_literal(self, string, wrapper):
+        """
+        Test the value of a literal, in particular only a string literal at the
+        moment, against possibly dangerous patterns.
+        """
+        if string != '[object Object]':
+            validate_string(string, traverser=self.traverser, wrapper=wrapper)
 
-    if node['type'] == 'MemberExpression':
-        # x.y or x[y]
-        # x = base
-        base = trace_member(traverser, node['object'], instantiate)
-        base = _expand_globals(traverser, base)
+    def push_context(self, context):
+        """Push a context onto the stack, and return a context manager which
+        will pop it upon exit. `context` may be either a `JSObject` value,
+        which will be pushed onto the stack directly, or a string, in which
+        case a context of that type will be created."""
 
-        identifier = _get_member_exp_property(traverser, node)
+        if isinstance(context, basestring):
+            context = JSContext(context_type=context,
+                                traverser=self.traverser)
 
-        # If we've got an XPCOM wildcard, return a copy of the entity.
-        if 'xpcom_wildcard' in base.hooks:
-            from predefinedentities import CONTRACT_ENTITIES
-            if identifier in CONTRACT_ENTITIES:
-                kw = dict(err_id=('js', 'actions', 'dangerous_contract'),
-                          warning='Dangerous XPCOM contract ID')
-                kw.update(CONTRACT_ENTITIES[identifier])
+        self.traverser.contexts.append(context)
+        return self._context_manager
 
-                traverser.warning(**kw)
+    def push_conditional(self):
+        """Push a conditional scope onto the stack, and return a context
+        manager which will pop it upon exit. When the scope is popped,
+        any wrappers which changed value while it was on the stack will
+        be marked as dirty."""
 
-            base.hooks = base.hooks.copy()
-            del base.hooks['xpcom_wildcard']
-            return base
+        self.traverser.wrappers = self.Conditional()
+        self.traverser.conditionals.append(self.traverser.wrappers)
 
-        test_identifier(traverser, identifier)
+        return self._conditional_manager
 
-        output = base.get(instantiate=instantiate, name=identifier)
+    @node_handler
+    def EmptyStatement(self, node):
+        """An empty statement, such as an empty line with a trailing
+        semicolon."""
 
-        if base.hooks:
-            # In the cases of XPCOM objects, methods generally
-            # remain bound to their parent objects, even when called
-            # indirectly.
-            output.parent = base
-        return output
+    @node_handler
+    def DebuggerStatement(self, node):
+        """A `debugger` statement."""
 
-    elif node['type'] == 'Identifier':
-        return _ident(traverser, node, instantiate)
+    @node_handler
+    def Program(self, node):
+        """Node representing the entire body of a script."""
+        for elem in node['body']:
+            self.traverse(elem)
 
-    else:
-        # It's an expression, so just try your damndest.
-        return traverser.traverse(node)
+    @node_handler
+    def BlockStatement(self, node):
+        """A block statement `{ ... }`, including its body."""
+        with self.push_context('block'):
+            for elem in node['body']:
+                self.traverse(elem)
 
+    @node_handler
+    def ExpressionStatement(self, node):
+        """An arbitrary expression, which has a value."""
+        return self.traverse(node, 'expression')
 
-def test_identifier(traverser, name):
-    'Tests whether an identifier is banned'
+    @node_handler
+    def IfStatement(self, node):
+        """An `if` statement, including its test, and a possible else
+        statement."""
 
-    import predefinedentities
-    if name in predefinedentities.BANNED_IDENTIFIERS:
-        traverser.err.warning(
-            err_id=('js', 'actions', 'banned_identifier'),
-            warning='Banned or deprecated JavaScript Identifier',
-            description=predefinedentities.BANNED_IDENTIFIERS[name],
-            filename=traverser.filename,
-            line=traverser.line,
-            column=traverser.position,
-            context=traverser.context)
+        self.traverse(node, 'test')
 
+        with self.push_conditional():
+            # The body of the if statement.
+            self.traverse(node, 'consequent')
 
-def _catch(traverser, node):
-    if node['param']['type'] == 'Identifier':
-        name = node['param']['name']
-        traverser.contexts[-1].set(name, JSObject())
+        with self.push_conditional():
+            # Any else statement that comes after.
+            self.traverse(node, 'alternate')
 
+    @node_handler
+    def LabeledStatement(self, node):
+        """A label for a loop statement, and the loop itself."""
+        self.traverse(node, 'body')
 
-def _function(traverser, node):
-    'Prevents code duplication'
-    # Oh? How is that, exactly?
+    @node_handler
+    def BreakStatement(self, node):
+        """A `break` statement."""
 
-    def wrap(traverser, node):
+    @node_handler
+    def ContinueStatement(self, node):
+        """A `continue` statement."""
 
-        traverser.function_collection.append([])
+    @node_handler
+    def WithStatement(self, node):
+        """A `with` statement, including the expression which evaluates to the
+        context object, and the body of the statement."""
 
-        traverser._push_context()
-        traverser.this_stack.append(traverser.wrap(const=True))
+        object_ = self.traverse(node, 'object')
+
+        with self.push_context(object_.value):
+            self.traverse(node, 'body')
+
+    @node_handler
+    def SwitchStatement(self, node):
+        """A switch statement, including the expression which evaluates to the
+        discriminant value, and the body containg the `case` statements."""
+
+        self.traverse(node, 'discriminant')
+        with self.push_context('block'):
+            for case in node['cases']:
+                self.traverse(case)
+
+    @node_handler
+    def SwitchCase(self, node):
+        """A `case` statement, including the expression which evaluates to the
+        test value, and any consequent statements."""
+
+        with self.push_conditional():
+            self.traverse(node, 'test')
+            for expr in node['consequent']:
+                self.traverse(expr)
+
+    @node_handler
+    def ReturnStatement(self, node):
+        """A `return` statement."""
+
+    @node_handler
+    def ThrowStatement(self, node):
+        """A `throw` statement, inclusing its argument."""
+        self.traverse(node, 'argument')
+
+    @node_handler
+    def TryStatement(self, node):
+        """A try statement, including its `catch` handler, guards, and
+        finalizer."""
+
+        with self.push_conditional():
+            self.traverse(node, 'block')
+
+        for handler in node['guardedHandlers']:
+            self.traverse(handler)
+
+        self.traverse(node, 'handler')
+
+        with self.push_conditional():
+            self.traverse(node, 'finalizer')
+
+    @node_handler
+    def CatchClause(self, node):
+        """A catch clause for a try block, including a block-scoped parameter
+        name, a possible guard, and a body."""
+
+        with self.push_conditional():
+            with self.push_context('block'):
+                self.traverse(node, 'param', declare='let')
+                self.traverse(node, 'guard')
+                self.traverse(node, 'body')
+
+    @node_handler
+    def WhileStatement(self, node):
+        """A `while` statement, including the test and body."""
+
+        with self.push_conditional():
+            self.traverse(node, 'test')
+            self.traverse(node, 'body')
+
+    @node_handler
+    def DoWhileStatement(self, node):
+        """A `while` statement, including the test and body."""
+
+        with self.push_conditional():
+            self.traverse(node, 'body')
+            self.traverse(node, 'test')
+
+    @node_handler
+    def ForStatement(self, node):
+        """A C-style `for` statement, including the initializer, test, and
+        update statements, as well as the body."""
+
+        self.traverse(node, 'init')
+
+        with self.push_conditional():
+            self.traverse(node, 'test')
+            self.traverse(node, 'body')
+            self.traverse(node, 'update')
+
+    @node_handler
+    def ForInStatement(self, node):
+        """A for-in statement, including the variable left-hand-side, the
+        iterator target right-hand-side, and the body."""
+
+        self.traverse(node, 'left', declare='global')
+        self.traverse(node, 'right')
+        with self.push_conditional():
+            self.traverse(node, 'body')
+
+    @node_handler
+    def ForOfStatement(self, node):
+        """A for-of statement, including the variable left-hand-side, the
+        iterator target right-hand-side, and the body."""
+
+        self.traverse(node, 'left', declare='global')
+        self.traverse(node, 'right')
+        with self.push_conditional():
+            self.traverse(node, 'body')
+
+    @node_handler
+    def VariableDeclaration(self, node, declare=None):
+        """A variable declaration statement, one of `var`, `let`, or `const`,
+        including sub-VariableDeclarator statements containing individual
+        declarations."""
+
+        for declaration in node['declarations']:
+            self.traverse(declaration, declare=node['kind'])
+
+    @node_handler
+    def VariableDeclarator(self, node, declare):
+        """A variable declaration within a `var`/`let`/`const` statement."""
+
+        left = self.traverse(node, 'id', declare=declare)
+
+        if node['init']:
+            right = self.traverse(node, 'init')
+
+            self.assign_value(left, right,
+                              set_by='{0} declaration'.format(declare))
+
+    @node_handler
+    def LetStatement(self, node):
+        """A `let` block, including a head with individual declarations,
+        and a block body into which the declarations are scoped. Creates
+        an implicit block for the declared variables, and generally an explicit
+        block for the body."""
+
+        with self.push_context('block'):
+            for declaration in node['head']:
+                self.traverse(declaration, declare='let')
+
+            self.traverse(node, 'body')
+
+    @node_handler
+    def ThisExpression(self, node):
+        """A `this` expression."""
 
         try:
-            # Declare parameters in the local scope
-            params = []
-            for param in node['params']:
-                if param['type'] == 'Identifier':
-                    params.append(param['name'])
-                elif param['type'] == 'ArrayPattern':
-                    for element in param['elements']:
-                        # Array destructuring in function prototypes? LOL!
-                        if element is None or element['type'] != 'Identifier':
-                            continue
-                        params.append(element['name'])
+            return self.traverser.this_stack[-1]
+        except IndexError:
+            return self.traverser.contexts[0]
 
-            local_context = traverser.contexts[-1]
-            for param in params:
-                var = traverser.wrap(dirty='Param')
+    @node_handler
+    def ArrayExpression(self, node):
+        """An array literal."""
 
-                # We can assume that the params are static because we don't
-                # care about what calls the function. We want to know whether
-                # the function solely returns static values. If so, it is a
-                # static function.
-                local_context.set(param, var)
+        return JSArray(map(self.traverse, node['elements']),
+                       traverser=self.traverser)
 
-            traverser.traverse(node, 'body')
+    @node_handler
+    def ArrayPattern(self, node, declare=None):
+        """A destructuring array pattern. Essentially an array expresson,
+        but as an L-value."""
 
-        finally:
-            traverser.this_stack.pop()
-            traverser._pop_context()
+        return [self.traverse(element, declare=declare)
+                for element in node['elements']]
 
-        # Call all of the function collection's members to traverse all of the
-        # child functions.
-        func_coll = traverser.function_collection.pop()
-        for func in func_coll:
-            func()
+    @node_handler
+    def PrototypeMutation(self, node, **kw):
+        """Assignment to the `__proto__` property."""
 
-    # Put the function off for traversal at the end of the current block scope.
-    traverser.function_collection[-1].append(partial(wrap, traverser, node))
+        return '__proto__', self.traverse(node, 'value', **kw)
 
-    return traverser.wrap(callable=True)
+    @node_handler
+    def Property(self, node, **kw):
+        """An object property. `"key": value`"""
 
+        key = node['key']
+        name = self.object_keys[key['type']](key)
 
-def _define_function(traverser, node):
-    name = node['id']['name']
-    wrapper = _function(traverser, node)
+        return name, self.traverse(node, 'value', **kw)
 
-    scope = traverser.find_variable(name, scope_type='default', starting_at=1)
-    scope.set(name, wrapper)
-    return wrapper
+    @node_handler
+    def ObjectExpression(self, node):
+        """An object literal."""
 
+        result = JSObject(traverser=self.traverser)
 
-def _func_expr(traverser, node):
-    'Represents a lambda function'
+        for prop in node['properties']:
+            name, val = self.traverse(prop)
 
-    return _function(traverser, node)
+            # Set the current location to the location of property we're
+            # currently assigning to, rather than the end of the current
+            # value.
+            self.traverser.set_location(prop)
 
+            result.set(name, val, set_by='object literal')
 
-def _define_with(traverser, node):
-    """Traverse a `with` statement."""
+        return result
 
-    object_ = traverser.traverse(node, 'object')
+    @node_handler
+    def ObjectPattern(self, node, declare=None):
+        """A destructuring object pattern. Essentially an object expresson,
+        but as an L-value."""
 
-    # Push the target object as a context, and then push an additional block
-    # context for any `let` variables declared within the body.
-    traverser._push_context(object_.value)
-    traverser._push_context(context_type='block')
+        result = {}
 
-    traverser.traverse(node, 'body')
+        for prop in node['properties']:
+            name, val = self.traverse(prop, declare=declare)
+            result[name] = val
 
-    traverser._pop_context()
-    traverser._pop_context()
+        return result
 
-    # Prevent our body from being re-traversed.
-    return traverser.wrap()
+    @node_handler
+    def SpreadExpression(self, node, declare=None):
+        """A spread expression. Essentially the inverse or a "rest" argument:
+        `[a, b, c, ...rest]`."""
 
+        # For now, just return the value. This is incorrect, but the
+        # expression may be any iterable, and we can't handle generators
+        # reliably. In the future, we should ideally handle at least the
+        # common case where the target is an array.
+        return self.traverse(node, 'expression')
 
-def _define_var(traverser, node):
-    'Creates a local context variable'
+    @node_handler
+    def CallSiteObject(self, node):
+        """A magical node for dealing with template strings.
 
-    declarations = (node['declarations'] if 'declarations' in node
-                    else node['head'])
+        `fo\ro ${bar} b\0az` ->
+        array = ["fo\ro", " b\0az"]
+        array.raw = ["fo\\ro", " b\\0az"]
+        """
 
-    kind = node.get('kind', 'let')
-    for declaration in declarations:
+        cooked = JSArray(node['cooked'], traverser=self.traverser)
+        cooked['raw'] = JSArray(node['raw'], traverser=self.traverser)
 
-        # It could be deconstruction of variables :(
-        if declaration['id']['type'] == 'ArrayPattern':
-            vars = []
-            for element in declaration['id']['elements']:
-                # NOTE : Multi-level array destructuring sucks. Maybe implement
-                # it someday if you're bored, but it's so rarely used and it's
-                # so utterly complex, there's probably no need to ever code it
-                # up.
-                if element is None or element['type'] != 'Identifier':
-                    vars.append(None)
-                    continue
-                vars.append(element['name'])
+        return cooked
 
-            # The variables are not initialized
-            if declaration['init'] is None:
-                # Simple instantiation; no initialization
-                for var in vars:
-                    if not var:
-                        continue
-                    traverser.declare_variable(var, None)
+    @node_handler
+    def TemplateLiteral(self, node):
+        """Another magical node for dealing with template strings.
 
-            # The variables are declared inline
-            elif declaration['init']['type'] == 'ArrayPattern':
-                # TODO : Test to make sure len(values) == len(vars)
-                for value in declaration['init']['elements']:
-                    if vars[0]:
-                        traverser.declare_variable(
-                            vars[0], traverser.traverse(value))
-                    vars = vars[1:]  # Pop off the first value
+        `foo ${bar} baz` ->
+        TemplateLiteral:["foo ", bar, " baz"] ->
+        ["foo ", bar, " baz"].join("")
+        """
 
-            # It's being assigned by a JSArray (presumably)
-            elif declaration['init']['type'] == 'ArrayExpression':
+        elements = map(self.traverse, node['elements'])
 
-                assigner = traverser.traverse(declaration, 'init')
-                for value in assigner.value.elements:
-                    if vars[0]:
-                        traverser.declare_variable(vars[0], value)
-                    vars = vars[1:]
+        return reduce(partial(self.binary_op, '+'), elements)
 
-        elif declaration['id']['type'] == 'ObjectPattern':
+    @node_handler
+    def TaggedTemplate(self, node):
+        """Yet another magical node for handling template strings. Causes
+        the function on the left-hand-side to be called with arguments
+        describing the template string on the right."""
 
-            init = traverser.traverse(declaration, 'init')
+        return self.CallExpression(node)
 
-            def _proc_objpattern(init_obj, properties):
-                for prop in properties:
-                    # Get the name of the init obj's member
-                    if prop['key']['type'] == 'Literal':
-                        prop_name = prop['key']['value']
-                    elif prop['key']['type'] == 'Identifier':
-                        prop_name = prop['key']['name']
-                    else:
-                        continue
+    @node_handler
+    def FunctionDeclaration(self, node):
+        """A function declaration:
 
-                    if prop['value']['type'] == 'Identifier':
-                        traverser.declare_variable(
-                            prop['value']['name'], init_obj.get(prop_name))
+            function foo() { return 42; }
+        """
 
-                    elif prop['value']['type'] == 'ObjectPattern':
-                        _proc_objpattern(init_obj.get(prop_name),
-                                         prop['value']['properties'])
+        wrapper = self.traverse(node, 'id', declare='var')
+        wrapper.set_value(self.FunctionExpression(node),
+                          set_by='function declaration')
 
-            if init is not None:
-                _proc_objpattern(init_obj=init,
-                                 properties=declaration['id']['properties'])
+    @node_handler
+    def FunctionExpression(self, node):
+        """A function expression `(function () { return 42 })`."""
+
+        traverser = self.traverser
+
+        # Basta seemed to think that it's necessary to put off traversing
+        # all functions until the end of the current scope. *shrug*
+        scope = traverser.find_scope(scope_type='function')
+
+        @scope.cleanups.append
+        def traverse_function():
+            with self.push_conditional():
+                with self.push_context('function'):
+                    if node['id']:
+                        # The function name, which should be bound within
+                        # its scope.
+                        wrapper = self.Identifier(node['id'], declare='var')
+                        wrapper.set_value(value, set_by='function name')
+
+                    for param in node['params']:
+                        self.traverse(param, declare='var')
+
+                    for default in node['defaults']:
+                        # Default argument values.
+                        self.traverse(default)
+
+                    if node['rest']:
+                        # A "rest" param: `function (a, b, c, ...rest)`
+                        self.traverse(node, 'rest', declare='var')
+
+                    traverser.this_stack.append(traverser.wrap(const=True))
+                    try:
+                        self.traverse(node, 'body')
+                    finally:
+                        traverser.this_stack.pop()
+
+        name = ''
+        if node['id']:
+            name = node['id']['name']
+
+        value = JSObject(callable=True, name=name, traverser=self.traverser)
+        return value
+
+    @node_handler
+    def ArrowFunctionExpression(self, node):
+        """An arrow function expression `() => 42`."""
+
+        # This isn't *quite* accurate...
+        return self.FunctionExpression(node)
+
+    @node_handler
+    def SequenceExpression(self, node):
+        """A sequence of expressions: `(1, 2, 3)`"""
+
+        result = None
+        for expression in node['expressions']:
+            result = self.traverse(expression)
+
+        return result
+
+    @node_handler
+    def UnaryExpression(self, node):
+        """A unary operator, and a value to which it applies."""
+
+        operator = node['operator']
+        value = self.traverse(node, 'argument')
+
+        return self.traverser.wrap(self.unary_ops[operator](value),
+                                   dirty=value.dirty)
+
+    @node_handler
+    def BinaryExpression(self, node):
+        """A binary expression, including a expressions which evaluate to
+        a left-hand-side and a right-hand-side, and an operator which
+        combines them."""
+
+        left = self.traverse(node, 'left')
+        right = self.traverse(node, 'right')
+
+        return self.binary_op(node['operator'], left, right)
+
+    @node_handler
+    def AssignmentExpression(self, node):
+        """A binary assignment expression, including a expressions which
+        evaluate to a left-hand-side and a right-hand-side, and an operator
+        which defines which operation to perform against both values prior
+        to assignment."""
+
+        operator = node['operator']
+        assert operator[-1] == '='
+
+        left = self.traverse(node, 'left')
+        right = self.traverse(node, 'right')
+
+        if operator == '=':
+            # In this case, `left` could be a destructuring expression, rather
+            # than simply a wrapper.
+            self.assign_value(left, right, set_by='bare assignment')
+        else:
+            left.set_value(self.binary_op(operator[:-1], left, right),
+                           set_by='augmented assignment')
+
+        return left
+
+    @node_handler
+    def UpdateExpression(self, node):
+        """Pre/post increment/decrement operator: `foo++`, `--bar`"""
+
+        operator = node['operator']
+        wrapper = self.traverse(node, 'argument')
+
+        old_value = wrapper.value
+        wrapper.set_value(self.binary_ops[operator[0]](wrapper, self.ONE),
+                          set_by='update expression')
+
+        return wrapper.value if node['prefix'] else old_value
+
+    @node_handler
+    def LogicalExpression(self, node):
+        """Logical AND or OR operator: `foo && bar || baz`"""
+
+        operator = node['operator']
+        left = self.traverse(node, 'left')
+        right = self.traverse(node, 'right')
+
+        if operator == '&&':
+            result = right if left.as_bool() else left
+        elif operator == '||':
+            result = left if left.as_bool() else right
+        else:
+            raise ValueError()
+
+        dirty = left.dirty or right.dirty
+        if dirty:
+            return self.traverser.wrap(result, dirty=dirty)
+        return result
+
+    @node_handler
+    def ConditionalExpression(self, node):
+        """A ternary operator, including a test, a consequent branch,
+        and an alternate branch. `<test> ? <consequent> : <alternate>`."""
+
+        test = self.traverse(node, 'test')
+        with self.push_conditional():
+            left = self.traverse(node, 'consequent')
+        with self.push_conditional():
+            right = self.traverse(node, 'alternate')
+
+        result = left if test.as_bool() else right
+
+        if test.dirty:
+            return self.traverser.wrap(result, dirty=test.dirty)
+
+        return result
+
+    @node_handler
+    def NewExpression(self, node):
+        """A constructor call: `new Foo(bar)`."""
+
+        args = Args(self.traverser, (self.traverse(arg)
+                                     for arg in node['arguments']))
+
+        callee = self.traverse(node, 'callee')
+        this = self.traverser.wrap()  # Fix me.
+
+        result = callee.call(this, args)
+        if result.is_literal:
+            return this  # Meh.
+
+        return result
+
+    @node_handler
+    def CallExpression(self, node):
+        """A function call, sans constructor: `Foo(bar)`."""
+
+        args = Args(self.traverser, (self.traverse(arg)
+                                     for arg in node['arguments']))
+
+        callee = self.traverse(node, 'callee')
+        this = self.traverser.wrap(getattr(callee, 'parent', None))
+
+        return callee.call(this, args)
+
+    @node_handler
+    def Identifier(self, node, declare=None):
+        """Represents an identifier, in any number of contexts. If `declare`
+        is not None, our context is a declaration of some sort, so create
+        the variable in the nearest context of the given type."""
+
+        name = unicode(node['name'])
+        if declare is None:
+            return self.traverser.get_variable(name)
+
+        if declare == 'var':
+            result = self.find_scope('function').get(name, instantiate=True)
+
+        elif declare == 'const':
+            result = self.find_scope('function').get(name, instantiate=True,
+                                                     const=True)
+        elif declare == 'let':
+            result = self.find_scope('block').get(name)
+
+        elif declare == 'global':
+            result = self.traverser.get_variable(name)
 
         else:
-            var_name = declaration['id']['name']
-            var_value = traverser.traverse(declaration, 'init')
+            raise ValueError('Unrecognized identifier declaration scope: {0}'
+                             .format(declare))
 
-            if not isinstance(var_value, JSWrapper):
-                var = traverser.wrap(var_value, const=kind == 'const')
-            else:
-                var = var_value
-                var.const = kind == 'const'
+        result.inferred = False
+        return result
 
-            traverser.declare_variable(var_name, var, type_=kind)
+    @node_handler
+    def MemberExpression(self, node, declare=None):
+        """A member expression `<object>.<property>."""
+        obj = self.traverse(node, 'object')
 
-    if 'body' in node:
-        traverser.traverse(node, 'body')
-
-    # The "Declarations" branch contains custom elements.
-    return True
-
-
-def _define_obj(traverser, node):
-    'Creates a local context object'
-
-    obj = JSObject()
-    wrapper = traverser.wrap(obj)
-
-    for prop in node['properties']:
-        if prop['type'] == 'PrototypeMutation':
-            var_name = 'prototype'
+        if node['computed']:
+            prop = self.traverse(node, 'property').as_identifier()
         else:
-            key = prop['key']
-            if key['type'] == 'Literal':
-                var_name = key['value']
-            elif isinstance(key['name'], basestring):
-                var_name = key['name']
-            else:
-                if 'property' in key['name']:
-                    name = key['name']
-                else:
-                    name = {'property': key['name']}
-                var_name = _get_member_exp_property(traverser, name)
-
-        var_value = traverser.traverse(prop, 'value')
-        obj.set(var_name, var_value)
-
-        # TODO: Observe "kind"
-    return wrapper
-
-
-def _define_array(traverser, node):
-    """Instantiate an array object from the parse tree."""
-    return JSArray(map(traverser.traverse, node['elements']),
-                   traverser=traverser)
-
-
-def _define_template_strings(traverser, node):
-    """Instantiate an array of raw and cooked template strings."""
-    cooked = JSArray(map(traverser.traverse, node['cooked']),
-                     traverser=traverser)
-
-    cooked['raw'] = JSArray(map(traverser.traverse, node['raw']),
-                            traverser=traverser)
-
-    return cooked
-
-
-def _define_template(traverser, node):
-    """Instantiate a template literal."""
-    elements = map(traverser.traverse, node['elements'])
-
-    return reduce(partial(_binary_op, '+', traverser=traverser), elements)
-
-
-def _define_literal(traverser, node):
-    """
-    Convert a literal node in the parse tree to its corresponding
-    interpreted value.
-    """
-    value = node['value']
-    if isinstance(value, dict):
-        return traverser.wrap(dirty='LiteralDict')
-
-    wrapper = traverser.wrap(value)
-    if isinstance(value, basestring):
-        test_literal(traverser, wrapper)
-    return wrapper
-
-
-def test_literal(traverser, wrapper):
-    """
-    Test the value of a literal, in particular only a string literal at the
-    moment, against possibly dangerous patterns.
-    """
-    validate_string(wrapper.as_primitive(), traverser=traverser,
-                    wrapper=wrapper)
-
-
-def _call_expression(traverser, node):
-    args = [traverser.traverse(arg, source='arguments')
-            for arg in node['arguments']]
-
-    result = None
-    member = traverser.traverse(node, 'callee')
-
-    if 'object' in node['callee']:
-        this = trace_member(traverser, node['callee']['object'])
-    else:
-        this = traverser.wrap(None)
-
-    if (traverser.filename.startswith('defaults/preferences/') and
-        ('name' not in node['callee'] or
-         node['callee']['name'] not in (u'pref', u'user_pref'))):
-
-        traverser.err.warning(
-            err_id=('testcases_javascript_actions',
-                    '_call_expression',
-                    'complex_prefs_defaults_code'),
-            warning='Complex code should not appear in preference defaults '
-                    'files',
-            description="Calls to functions other than 'pref' and 'user_pref' "
-                        'should not appear in defaults/preferences/ files.',
-            filename=traverser.filename,
-            line=traverser.line,
-            column=traverser.position,
-            context=traverser.context)
-
-    if callable(member.hooks.get('dangerous')):
-        result = member.hooks['dangerous'](this, args, callee=member)
-        name = member.hooks.get('name', '')
-
-        if result and name:
-            kwargs = {
-                'err_id': ('testcases_javascript_actions', '_call_expression',
-                           'called_dangerous_global'),
-                'warning': '`%s` called in potentially dangerous manner' %
-                           member.hooks['name'],
-                'description':
-                    'The global `%s` function was called using a set '
-                    'of dangerous parameters. Calls of this nature '
-                    'are deprecated.' % member.hooks['name']}
-
-            if isinstance(result, DESCRIPTION_TYPES):
-                kwargs['description'] = result
-            elif isinstance(result, dict):
-                kwargs.update(result)
-
-            traverser.warning(**kwargs)
-
-    result = None
-    if (node['callee']['type'] == 'MemberExpression' and
-            node['callee']['property']['type'] == 'Identifier'):
-
-        # If we can identify the function being called on any member of any
-        # instance, we can use that to either generate an output value or test
-        # for additional conditions.
-        identifier_name = node['callee']['property']['name']
-        if identifier_name in instanceactions.INSTANCE_DEFINITIONS:
-            result = instanceactions.INSTANCE_DEFINITIONS[identifier_name](
-                this, args, callee=member)
-
-    if 'return' in member.hooks:
-        if 'object' in node['callee']:
-            member.parent = this
-        result = member.hooks['return'](this, args, callee=member)
-
-    if result is not None:
-        return traverser.wrap(result)
-
-    return traverser.wrap(dirty='CallExpression')
-
+            prop = node['property']['name']
 
-def _readonly_top(left, right):
-    """Handle the readonly callback for window.top."""
-    left.traverser.notice(
-        err_id=('testcases_javascript_actions',
-                '_readonly_top'),
-        notice='window.top is a reserved variable',
-        description='The `top` global variable is reserved and cannot be '
-                    'assigned any values starting with Gecko 6. Review your '
-                    'code for any uses of the `top` global, and refer to '
-                    '%s for more information.' % BUGZILLA_BUG % 654137,
-        for_appversions={FIREFOX_GUID: version_range('firefox',
-                                                     '6.0a1', '7.0a1'),
-                         FENNEC_GUID: version_range('fennec',
-                                                    '6.0a1', '7.0a1')},
-        compatibility_type='warning',
-        tier=5)
-
-
-def _expression(traverser, node):
-    """
-    This is a helper method that allows node definitions to point at
-    `traverse` without needing a reference to a traverser.
-    """
-    return traverser.traverse(node, 'expression')
-
+        return obj[prop]
 
-def _get_this(traverser, node):
-    'Returns the `this` object'
-    if not traverser.this_stack:
-        from predefinedentities import GLOBAL_ENTITIES
-        return traverser._build_global('window', GLOBAL_ENTITIES[u'window'])
-    return traverser.this_stack[-1]
-
-
-def _new(traverser, node):
-    'Returns a new copy of a node.'
-
-    args = node['arguments']
-    if isinstance(args, list):
-        for arg in args:
-            traverser.traverse(arg, source='arguments')
-    else:
-        traverser.traverse(node, 'arguments')
+    @node_handler
+    def YieldExpression(self, node):
+        """A `yield` expression, including any argument."""
+        self.traverse(node, 'argument')
 
-    elem = traverser.traverse(node, 'callee')
-    if not isinstance(elem, JSWrapper):
-        elem = traverser.wrap(elem)
+        return self.traverser.wrap(Undefined, dirty='Yield')
 
-    if elem.hooks:
-        elem.hooks = deepcopy(elem.hooks)
-        elem.hooks['overwritable'] = True
-    return elem
+    @node_handler
+    def ComprehensionExpression(self, node):
+        """An array comprehension expression. `[x for (y in z)]`"""
 
+        for block in node['blocks']:
+            self.traverse(block)
 
-def _ident(traverser, node, instantiate=True):
-    'Initiates an object lookup on the traverser based on an identifier token'
+        self.traverse(node, 'filter')
 
-    name = node['name']
+        with self.push_conditional():
+            self.traverse(node, 'body')
 
-    # Ban bits like "newThread"
-    test_identifier(traverser, name)
+        return JSArray(traverser=self.traverser)
 
-    return traverser.get_variable(name, instantiate)
+    @node_handler
+    def GeneratorExpression(self, node):
+        """A generator expression. `(x for (y in z))`"""
 
+        for block in node['blocks']:
+            self.traverse(block)
 
-def _expr_assignment(traverser, node):
-    """Evaluate an AssignmentExpression node."""
+        self.traverse(node, 'filter')
 
-    right = traverser.traverse(node, 'right')
+        with self.push_conditional():
+            self.traverse(node, 'body')
 
-    operator = node['operator']
+        return self.traverser.wrap(dirty='Generator')
 
-    # Treat direct assignment different than augmented assignment.
-    if operator == '=':
-        from predefinedentities import GLOBAL_ENTITIES, is_shared_scope
+    @node_handler
+    def ComprehensionBlock(self, node):
+        """A `for-of` or `for-in` block in a comprehension or generator
+        expression."""
 
-        global_overwrite = False
-        readonly_value = is_shared_scope(traverser)
-
-        node_left = node['left']
-
-        if node_left['type'] == 'Identifier':
-            # Identifiers just need the ID name and a value to push.
-            # Raise a global overwrite issue if the identifier is global.
-            global_overwrite = traverser.is_global(node_left['name'])
+        self.traverse(node, 'left')
+        self.traverse(node, 'right')
 
-            # Get the readonly attribute and store its value if is global.
-            if global_overwrite:
-                global_dict = GLOBAL_ENTITIES[node_left['name']]
-                if 'readonly' in global_dict:
-                    readonly_value = global_dict['readonly']
+    @node_handler
+    def ComprehensionIf(self, node):
+        """An `if` block in a comprehension or generator expression."""
 
-            left = traverser.declare_variable(node_left['name'],
-                                              right, type_='global')
+        self.traverse(node, 'test')
 
-        elif node_left['type'] == 'MemberExpression':
-            left = trace_member(traverser, node_left['object'],
-                                instantiate=True)
+    @node_handler
+    def Literal(self, node):
+        """A literal value: `42`, `true`, `"foo bar"`."""
 
-            global_overwrite = (left.hooks and
-                                not left.hooks.get('overwritable'))
+        value = node['value']
+        wrapper = self.traverser.wrap(value)
 
-            member_property = _get_member_exp_property(traverser, node_left)
-
-            if isinstance(left.value, JSObject):
-                left.value.set(member_property, right)
-
-            if 'value' in left.hooks:
-                hooks = _expand_globals(traverser, left).hooks
-
-                value_hook = hooks['value'].get(member_property)
-                if value_hook:
-                    # If we have hooks for this property, test whether it can
-                    # be safely overwritten.
-                    if 'readonly' in value_hook:
-                        global_overwrite = True
-                        readonly_value = value_hook['readonly']
-        else:
-            left = traverser.traverse(node, 'left')
-
-        if callable(readonly_value):
-            readonly_value = readonly_value(left, right)
-
-        if readonly_value and global_overwrite:
-
-            kwargs = dict(
-                err_id=('testcases_javascript_actions',
-                        '_expr_assignment',
-                        'global_overwrite'),
-                warning='Global variable overwrite',
-                description='An attempt was made to overwrite a global '
-                            'variable in some JavaScript code.')
-
-            if isinstance(readonly_value, DESCRIPTION_TYPES):
-                kwargs['description'] = readonly_value
-            elif isinstance(readonly_value, dict):
-                kwargs.update(readonly_value)
-
-            traverser.warning(**kwargs)
-
-        return right
-
-    left = traverser.traverse(node, 'left')
-
-    assert operator[-1] == '='
-    wrapper = _binary_op(operator[:-1], left, right, traverser)
-
-    left.set_value(wrapper)
-    return left
-
-
-def _expr_binary(traverser, node):
-    'Evaluates a BinaryExpression node.'
-
-    traverser.debug_level += 1
-
-    # Select the proper operator.
-    operator = node['operator']
-
-    # Traverse the left half of the binary expression.
-    if (node['left']['type'] == 'BinaryExpression' and
-            '__traversal' not in node['left']):
-        # Process the left branch of the binary expression directly. This
-        # keeps the recursion cap in line and speeds up processing of
-        # large chains of binary expressions.
-        left = _expr_binary(traverser, node['left'])
-        node['left']['__traversal'] = left
-    else:
-        left = traverser.traverse(node, 'left')
-
-    # Traverse the right half of the binary expression.
-    if (operator == 'instanceof' and
-            node['right']['type'] == 'Identifier' and
-            node['right']['name'] == 'Function'):
-        # We make an exception for instanceof's r-value if it's a
-        # dangerous global, specifically Function.
-        return traverser.wrap(True)
-    else:
-        right = traverser.traverse(node, 'right')
-
-    return _binary_op(operator, left, right, traverser)
-
-
-def _binary_op(operator, left, right, traverser):
-    """Perform a binary operation on two pre-traversed nodes."""
-
-    if operator in ('==', '===', '!=', '!=='):
-        # Special case equality operators to compare wrapper values, which
-        # might have annotated values if they're dirty.
-        value = traverser.binary_ops[operator](left, right)
-    else:
-        value = traverser.binary_ops[operator](left.value, right.value)
-
-    if isinstance(value, basestring):
-        value = value[:MAX_STR_SIZE]
-
-    wrapper = traverser.wrap(value, dirty=left.dirty or right.dirty)
-    clean_dirty(wrapper)
-
-    # Test the newly-created literal for dangerous values.
-    # This may cause duplicate warnings for strings which
-    # already match a dangerous value prior to concatenation.
-    if not wrapper.dirty and isinstance(value, basestring):
-        test_literal(traverser, wrapper)
-
-    return wrapper
-
-
-def _expr_unary(traverser, node):
-    """Evaluate a UnaryExpression node."""
-
-    operator = node['operator']
-    wrapper = traverser.traverse(node, 'argument')
-
-    value = traverser.unary_ops[operator](wrapper)
-    return traverser.wrap(value, dirty=wrapper.dirty)
+        if isinstance(value, basestring):
+            self.test_literal(value, wrapper)
+        return wrapper

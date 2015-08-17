@@ -3,7 +3,8 @@ from nose.tools import eq_
 from .js_helper import _do_test_raw
 
 from validator.errorbundler import ErrorBundle
-from validator.testcases.javascript import jstypes, traverser
+from validator.testcases.javascript import traverser
+from validator.testcases.javascript.jstypes import JSArray, JSObject, JSWrapper
 
 
 traverser = traverser.Traverser(ErrorBundle(), 'stdin')
@@ -12,16 +13,16 @@ traverser = traverser.Traverser(ErrorBundle(), 'stdin')
 def test_jsarray_output():
     """Test that the output function for JSArray doesn't bork."""
 
-    ja = jstypes.JSArray(traverser=traverser)
+    ja = JSArray(traverser=traverser)
     ja.elements = [None, None]
     repr(ja)  # Used to throw tracebacks.
-    ja.get_literal_value()  # Also used to throw tracebacks.
+    ja.as_primitive()  # Also used to throw tracebacks.
 
 
 def test_jsobject_output():
     """Test that the output function for JSObject doesn't bork."""
 
-    jso = jstypes.JSObject(traverser=traverser)
+    jso = JSObject(traverser=traverser)
     jso.data = {'first': None}
     repr(jso)  # Used to throw tracebacks
 
@@ -29,13 +30,14 @@ def test_jsobject_output():
 def test_jsobject_recursion():
     """Test that circular references don't cause recursion errors."""
 
-    jso = traverser.wrap(jstypes.JSObject())
-    jso2 = traverser.wrap(jstypes.JSObject())
+    jso = traverser.wrap(JSObject())
+    jso2 = traverser.wrap(JSObject())
 
     jso.value.data = {'first': jso2}
     jso2.value.data = {'second': jso}
 
-    assert '<recursive-reference>' in repr(jso.value)
+    # Just make sure we don't spin into an infinite loop.
+    repr(jso.value)
 
 
 def test_jsliteral_regex():
@@ -68,16 +70,15 @@ def test_jsobject_computed_properties():
     Tests that computed property names work as expected.
     """
 
-    ID = ('testcases_javascript_instancetypes', 'set_on_event',
-          'on*_str_assignment')
+    ID = ('jstypes', 'hook_on_set', '**.__exposedProps__')
 
     err1 = _do_test_raw("""
         var foo = {};
-        foo["onthing"] = "stuff";
+        foo["__exposedProps__"] = "stuff";
     """)
     err2 = _do_test_raw("""
         var foo = {
-            ["onthing"]: "stuff",
+            ["__exposedProps__"]: "stuff",
         };
     """)
 
@@ -96,20 +97,21 @@ def test_jsobject_computed_properties():
 def test_jsobject_get_wrap():
     """Test that JSObject always returns a JSWrapper."""
 
-    x = traverser.wrap(jstypes.JSObject()).value
-    x.data['foo'] = traverser.wrap('bar').value
+    x = traverser.wrap(JSObject()).value
+    x['foo'] = traverser.wrap('bar').value
 
     out = x.get('foo')
-    assert isinstance(out, jstypes.JSWrapper)
-    eq_(out.get_literal_value(), 'bar')
+    assert isinstance(out, JSWrapper)
+    assert out.lvalue
+    eq_(out.as_primitive(), 'bar')
 
 
 def test_jsarray_get_wrap():
     """Test that JSArray always returns a JSWrapper."""
 
-    x = traverser.wrap(jstypes.JSArray()).value
-    x.elements = [None, traverser.wrap('bar').value]
+    x = JSArray([None, traverser.wrap('bar').value],
+                traverser=traverser)
 
     out = x.get('1')
-    assert isinstance(out, jstypes.JSWrapper)
-    eq_(out.get_literal_value(), 'bar')
+    assert isinstance(out, JSWrapper)
+    eq_(out.as_primitive(), 'bar')

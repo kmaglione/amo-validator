@@ -93,7 +93,7 @@ def test_function_instanceof():
 
     assert _do_test_raw("""
     var x = foo();
-    print(x === Function);
+    print(Function(x));
     """).failed()
 
 

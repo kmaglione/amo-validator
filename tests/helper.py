@@ -1,15 +1,15 @@
+from __future__ import unicode_literals
+
 import collections
 import itertools
 import re
 import sys
-import unittest
+import pprint
+import string
 
+import pytest
 from mock import sentinel
 
-# Import this first so we get the same order of imports as runtime,
-# and avoid import loops.
-import validator.validate  # noqa
-from validator import constants
 from validator.submain import populate_chrome_manifest
 from validator.rdf import RDFParser
 from validator.xpi import XPIManager
@@ -18,7 +18,25 @@ from validator.outputhandlers.shellcolors import OutputHandler
 import validator.testcases.regex as regex
 
 
-constants.IN_TESTS = True
+def pformat(obj, **kw):
+    """A wrapper around `pprint.pformat` which adds extra indentation to
+    each line."""
+    return re.sub('^', '    ', pprint.pformat(obj, **kw), flags=re.M)
+
+
+class Formatter(string.Formatter):
+    """A custom formatter for our error messages, which supports pretty
+    printing message values in a user-readable way."""
+
+    def convert_field(self, value, conversion):
+        if conversion == 'p':
+            if isinstance(value, (list, tuple)):
+                return '\n\n'.join(map(pformat, value))
+            return pformat(value)
+
+        return super(Formatter, self).convert_field(value, conversion)
+
+format = Formatter().format
 
 
 def _do_test(path, test, failure=True,
@@ -88,7 +106,7 @@ class Matches(Matcher):
         return bool(re.search(self.value, other))
 
 
-class TestCase(unittest.TestCase):
+class TestCase(object):
     # Message IDs which are expected to have no context.
     NO_CONTEXT_WHITELIST = {
         ('fake', 'test', 'message'),
@@ -96,21 +114,13 @@ class TestCase(unittest.TestCase):
         ('testcases_content', 'packed_js', 'too_much_js'),
     }
 
-    def setUp(self):
-        self.err = None
+    def setup_method(self, method):
         self.is_jetpack = False
         self.is_bootstrapped = False
         self.detected_type = None
         self.listed = True
         self._skip_sanity_check = False
         self.setup_err()
-
-    def reset(self):
-        """
-        Reset the test case so that it can be run a second time (ideally with
-        different parameters).
-        """
-        self.err = None
 
     def setup_err(self, for_appversions=None, instant=False):
         """
@@ -142,19 +152,19 @@ class TestCase(unittest.TestCase):
         """Checks the sanity of our error bundle. At the moment, this means
         making sure that all messages have context information."""
 
-        if (getattr(self.err, '_checked_sanity', False) or
-                self._skip_sanity_check):
+        if self._skip_sanity_check:
             return
 
         for msg in self.all_messages():
             if msg['id'] in self.NO_CONTEXT_WHITELIST:
                 continue
 
-            assert msg['file'], 'Message missing file: %r' % msg
-            assert msg['line'], 'Message missing line: %r' % msg
-            assert msg['context'], 'Message missing context: %r' % msg
+            assert msg['file'], format('Message missing file:\n\n{!p}', msg)
 
-        self.err._checked_sanity = True
+            assert msg['line'], format('Message missing line:\n\n{!p}', msg)
+
+            assert msg['context'], format('Message missing context:\n\n{!p}',
+                                          msg)
 
     def skip_sanity_check(self):
         """Skip the usual sanity checks. Probably not for a good reason."""
@@ -175,12 +185,15 @@ class TestCase(unittest.TestCase):
         one message must have a matching item for every key/value pair in the
         dict.
         """
+        __tracebackhide__ = True
 
         assert self.err.failed(
             fail_on_warnings=with_warnings or with_warnings is None), \
             'Test did not fail; failure was expected.'
 
         def test_messages(type_, expected):
+            __tracebackhide__ = True
+
             messages = getattr(self.err, type_)
 
             if isinstance(expected, collections.Iterable):
@@ -188,18 +201,33 @@ class TestCase(unittest.TestCase):
             elif expected:
                 assert messages, 'Expected %s.' % type_
             elif expected is not None:
-                assert not messages, ('Tests found unexpected %s: %s' %
-                                      type_,
-                                      self.err.print_summary(verbose=True))
+                assert not messages, format(
+                    'Tests found unexpected {0}: {1!p}', type_, messages)
 
         test_messages('errors', with_errors)
         test_messages('warnings', with_warnings)
 
         self.check_sanity()
 
-    def match_messages(self, messages, expected_messages):
-        """Check that every message dict in `expected_messages` has a matching
+    def message_keys(self, messages, keys):
+        """Return a new dict containing only the keys in `keys`, for each
         message in `messages`."""
+        return [{key: msg[key]
+                 for key in msg.viewkeys() & keys}
+                for msg in messages]
+
+    def match_messages(self, messages, expected_messages, exhaustive=False,
+                       expect_match=True):
+        """Check that every message dict in `expected_messages` has a matching
+        message in `messages`.
+
+        If `exhaustive` is true, each expected message must match only
+        one reported message, and no other messages may be present."""
+        __tracebackhide__ = True
+
+        # Make a copy we can destructively alter.
+        orig_messages = messages
+        messages = list(messages)
 
         def match_message(message, expected):
             """Return true if every item in the `expected` dict has a matching
@@ -207,32 +235,64 @@ class TestCase(unittest.TestCase):
             return all(message.get(key, sentinel.MISSING) == value
                        for key, value in expected.iteritems())
 
-        def find_message(messages, expected):
+        def find_message(expected):
             """Return true if any message in messages has all of the key/value
             pairs in props."""
-            return any(match_message(message, expected)
-                       for message in messages)
+            matched = [msg for msg in messages
+                       if match_message(msg, expected)]
 
-        def message_keys(messages, keys):
-            """Return a new dict for each message in `messages` containing
-            only the keys in `keys`."""
-            return [{key: msg[key] for key in set(msg.keys()) & set(keys)}
-                    for msg in messages]
+            for msg in matched:
+                messages.remove(msg)
+            return matched
 
-        for expected in expected_messages:
-            assert find_message(messages, expected), (
-                'Expected a message matching {0!r}, but only got {1!r}'.format(
-                    expected, message_keys(messages, expected.keys())))
+        if expect_match:
+            for expected in expected_messages:
+                if not find_message(expected):
+                    results = self.message_keys(orig_messages,
+                                                expected.viewkeys())
 
-    def assert_warnings(self, *warnings):
+                    pytest.fail(
+                        format('Expected a message matching:\n\n{0!p}\n\n'
+                               'but only got:\n\n{1!p}', expected, results))
+        else:
+            for expected in expected_messages:
+                found = find_message(expected)
+                if found:
+                    results = self.message_keys(found, expected.viewkeys())
+
+                    pytest.fail(
+                        format('Expected no message matching:\n\n{0!p}\n\n'
+                               'but got:\n\n{1!p}', expected, results))
+
+        if exhaustive:
+            assert not messages
+
+    def assert_warnings(self, *warnings, **kw):
         """Check that a matching warning exists for each dict argument."""
+        __tracebackhide__ = True
 
-        self.match_messages(self.err.warnings, warnings)
+        if not warnings:
+            raise TypeError('Expected at least one argument')
+
+        exhaustive = kw.pop('exuahstive', False)
+
+        self.match_messages(self.err.warnings, warnings, exhaustive=exhaustive)
+        self.check_sanity()
+
+    def assert_no_warnings(self, *warnings):
+        """Check that a matching warning does not for any dict argument."""
+        __tracebackhide__ = True
+
+        if not warnings:
+            raise TypeError('Expected at least one argument')
+
+        self.match_messages(self.err.warnings, warnings, expect_match=False)
         self.check_sanity()
 
     def assert_notices(self):
         """Assert that notices have been generated during the validation
         process."""
+        __tracebackhide__ = True
 
         assert self.err.notices, 'Notices were expected.'
         self.check_sanity()
@@ -242,10 +302,15 @@ class TestCase(unittest.TestCase):
         also assert that there are no warnings.
 
         """
+        __tracebackhide__ = True
 
-        assert not self.failed(fail_on_warnings=not warnings_pass), (
-            'Test was intended to pass%s, but it did not.' % (
-                ' with warnings' if warnings_pass else ''))
+        if not self.failed(fail_on_warnings=not warnings_pass):
+            if warnings_pass:
+                pytest.fail('Expected test to pass with warnings, but it did '
+                            'not.')
+            else:
+                pytest.fail('Expected test to pass, but it did not.')
+
         self.check_sanity()
 
     def assert_silent(self):
@@ -253,17 +318,26 @@ class TestCase(unittest.TestCase):
         Assert that no messages (errors, warnings, or notices) have been
         raised.
         """
-        assert not self.err.errors, 'Got these: %s' % self.err.errors
-        assert not self.err.warnings, 'Got these: %s' % self.err.warnings
-        assert not self.err.notices, 'Got these: %s' % self.err.notices
-        assert not any(self.err.compat_summary.values()), (
-            'Found compatibility messages.')
+        __tracebackhide__ = True
+
+        for attr in 'errors', 'warnings', 'notices':
+            messages = getattr(self.err, attr)
+            if messages:
+                pytest.fail(
+                    format('Expected no {0}, but got these:\n\n{1!p}',
+                           attr, messages))
+
+        if any(self.err.compat_summary.values()):
+            pytest.fail('Expected no compatibility summary values, '
+                        'got these:\n\n{0}'
+                        .format(pformat(self.err.compat_summary)))
 
     def assert_got_errid(self, errid):
         """
         Assert that a message with the given errid has been generated during
         the validation process.
         """
+        __tracebackhide__ = True
 
         assert any(msg['id'] == errid for msg in
                    (self.err.errors + self.err.warnings + self.err.notices)), (

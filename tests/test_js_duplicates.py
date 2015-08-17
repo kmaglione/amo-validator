@@ -11,6 +11,3 @@ def test_no_dups():
     eq_(_do_test_raw("""var x = eval();""").message_count, 1)
 
     eq_(_do_test_raw("""eval = 123;""").message_count, 1)
-
-    print _do_test_raw("""eval.prototype = true;""").print_summary(verbose=True)
-    eq_(_do_test_raw("""eval.prototype = true;""").message_count, 2)

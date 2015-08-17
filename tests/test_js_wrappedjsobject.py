@@ -9,7 +9,7 @@ class TestWrappedJSObject(TestCase):
 
     def test_pass(self):
         self.run_script("""
-            var x = foo.wrappedJSObject;
+            var x = content.wrappedJSObject;
             var y = XPCNativeWrapper.unwrap(foo);
             var z = Cu.waiveXrays(foo);
         """)
@@ -25,7 +25,7 @@ class TestWrappedJSObject(TestCase):
     def test_cant_assign(self):
         """Test that properties can't be assigned to unwrapped JS objects."""
         self.run_script("""
-            var x = foo.wrappedJSObject;
+            var x = content.wrappedJSObject;
             x.foo = "asdf";
         """)
         self.assert_wrappedjs_failure()
@@ -44,7 +44,7 @@ class TestWrappedJSObject(TestCase):
         JS objects.
         """
         self.run_script("""
-            var x = foo.wrappedJSObject;
+            var x = content.wrappedJSObject;
             x.foo.bar.zap = "asdf";
         """)
         self.assert_wrappedjs_failure()
@@ -106,7 +106,7 @@ class TestWrappedJSObject(TestCase):
         wrappedJSObject property.
         """
         self.run_script("""
-            var x = foo.wrappedJSObject;
+            var x = content.wrappedJSObject;
             x = XPCNativeWrapper(x);
             x.foo.bar.zap = "asdf";
         """)

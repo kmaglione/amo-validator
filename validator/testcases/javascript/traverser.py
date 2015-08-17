@@ -1,51 +1,49 @@
-from collections import defaultdict
-from itertools import islice
-import re
+from __future__ import absolute_import, print_function, unicode_literals
+
+import logging
 import sys
-import types
+from collections import defaultdict, namedtuple
 
 from validator import constants
-from validator.constants import DESCRIPTION_TYPES
 
 from . import actions
-from .jstypes import JSContext, JSObject, JSWrapper, Sentinel
-from .nodedefinitions import DEFINITIONS
-from .predefinedentities import GLOBAL_ENTITIES
+from .jstypes import (Global, JSContext, JSObject, JSValue, JSWrapper,
+                      LazyJSObject)
 
+
+log = logging.getLogger('amo.validator')
 
 DEBUG = False
-IN_TESTS = False
 IGNORE_POLLUTION = False
-POLLUTION_COMPONENTS_PATH = re.compile(r'/?components/.*\.jsm?')
+
+Location = namedtuple('Location', ('file', 'line', 'column'))
 
 
 class Traverser(object):
     """Traverses the AST Tree and determines problems with a chunk of JS."""
 
-    def __init__(self, err, filename, start_line=0, context=None, is_jsm=False,
-                 pollutable=False):
+    def __init__(self, err, filename, start_line=1, start_column=0,
+                 context=None, is_jsm=False, pollutable=False):
         self.err = err
         self.is_jsm = is_jsm
 
-        self.contexts = []
         self.filename = filename
-        self.start_line = start_line
+        self.start_location = Location(filename, start_line-1, start_column)
         self.polluted = False
-        self.line = 1  # Line number
-        self.position = 0  # Column number
         self.context = context
 
         self.pollutable = pollutable
 
-        self.unary_ops = actions.UnaryOps(self)
-        self.binary_ops = actions.BinaryOps(self)
+        self.global_ = JSContext(traverser=self)
+        self.global_.add_hooks(hooks=Global)
+
+        self.contexts = [self.global_]
+
+        self.node_handlers = actions.NodeHandlers(self)
 
         self.this_stack = []
 
-        # For ordering of function traversal.
-        self.function_collection = []
-
-        # For debugging
+        # Stack depth for presenting debug logging.
         self.debug_level = 0
 
         class DebugLevel(object):
@@ -56,7 +54,38 @@ class Traverser(object):
                 self.debug_level -= 1
         self._debug_level = DebugLevel()
 
-        self._push_context()
+    _location = {'line': 1, 'column': 0}
+
+    @property
+    def location(self):
+        return self.get_location(self._location)
+
+    def get_location(self, loc):
+        """Extracts a Location tuple from the given parse node location
+        dict."""
+        line = loc['line']
+        column = loc['column']
+
+        if line == 1:
+            column += self.start_location.column
+        line += self.start_location.line
+
+        return Location(self.filename, line, column)
+
+    def set_location(self, node):
+        """Set the current location to the location of the given parse node,
+        if it has one."""
+        if node.get('loc'):
+            self._location = node['loc']['start']
+
+    # Deprecated compatibility wrappers around the `location` property.
+    @property
+    def line(self):
+        return self.location[1]
+
+    @property
+    def position(self):
+        return self.location[2]
 
     def debug(self, data, indent=0, **kw):
         """Write a message to the console if debugging is enabled."""
@@ -69,28 +98,30 @@ class Traverser(object):
                 output = unicode(data)
 
             indent = self.debug_level + indent
-            fill = (u'\u00b7 ' * ((indent + 1) / 2))[:indent]
+            fill = ('\u00b7 ' * ((indent + 1) / 2))[:indent]
 
-            print (u'[{self.line:02}:{self.position:02}] '
-                   u'{fill}{output}'.format(
-                       self=self, fill=fill, output=output).encode('utf-8'))
+            print('[{loc.line:02}:{loc.column:02}] '  # noqa
+                  '{fill}{output}'.format(
+                      loc=self.location, fill=fill,
+                      output=output).encode('utf-8'))
 
         return self._debug_level
 
     def run(self, data):
+        """Traverse the entire parse tree from the given root node."""
+
         try:
-            self.function_collection.append([])
             self.traverse(data)
 
-            func_coll = self.function_collection.pop()
-            for func in func_coll:
-                func()
+            self.contexts[0].cleanup()
+
+            if self.err.debug_level:
+                self.check_node(data)
         except Exception:
             self.system_error(exc_info=sys.exc_info())
             return
 
         assert len(self.contexts) == 1
-        assert len(self.function_collection) == 0
 
         # If we're running tests, save a copy of the global context for
         # inspection.
@@ -100,11 +131,13 @@ class Traverser(object):
         if self.pollutable:
             context = self.contexts[0]
             pollution = [var for var, wrapper in context.data.iteritems()
-                         if not (var in GLOBAL_ENTITIES or wrapper.inferred)]
+                         # Any object with hooks, we can assume already
+                         # exists. Any wrapper with the inferred flag exists
+                         # because it was accessed, but not assigned to.
+                         if not (wrapper.hooks or wrapper.inferred)]
 
             if len(pollution) > 3:
                 for name in pollution:
-                    location = context[name].location
                     self.warning(
                         err_id=('testcases_javascript_traverser', 'run',
                                 'namespace_pollution'),
@@ -117,220 +150,133 @@ class Traverser(object):
                             'firefox-extensions-global-namespace-pollution/'
                             ', or use JavaScript modules.',
                             'Variable name: %s' % name),
-                        filename=location[0],
-                        line=location[1],
-                        position=location[2])
+                        location=context[name].location)
 
-    def wrap(self, value=Sentinel, **kw):
+    def check_node(self, node):
+        """Recursively check all nodes in the given parse tree, and ensure
+        that all node types are known, and all known node types have been
+        traversed."""
+
+        if not isinstance(node, dict):
+            return
+
+        if node.get('type') not in (None, 'Literal', 'Identifier',
+                                    'ComputedName'):
+            self.set_location(node)
+            assert node['type'] in self.node_handlers
+            assert '__traversed' in node
+
+        for child in node.itervalues():
+            if isinstance(child, dict):
+                self.check_node(child)
+            elif isinstance(child, list):
+                for elem in child:
+                    self.check_node(elem)
+
+    def wrap(self, value=LazyJSObject, **kw):
         """Wraps the given value in a JSWrapper and JSValue, as appropriate,
         with the given keyword args passed through to JSWrapper."""
 
-        if isinstance(value, JSWrapper):
+        if not kw and isinstance(value, JSWrapper):
             assert value.traverser is self
             return value
 
         return JSWrapper(value, traverser=self, **kw)
 
-    def traverse(self, node, branch=None, source=None):
+    def traverse(self, node, branch=None, **kw):
+        """Traverse the given node, based on the handler definitions in
+        `node_handlers`, updating the current `location` when possible. If
+        `branch` is given, it must be a string, and the child node at the
+        given key is traversed instead. This is primarily useful to improve
+        debugging output.
+
+        Any additional keyword arguments are passed directly to the node
+        handler function.
+
+        Performs some sanity checking prior to traversal:
+
+          * Ensures that the node has not already been traversed.
+          * Logs an exception if the given node type is not known to us.
+          * If `err.debug_level` is non-zero, and the given node type is not
+            known to us, outputs an error to our error bundle.
+        """
+
         parent = node
         if branch:
             node = node[branch]
 
         if node is None:
-            return self.wrap(dirty='TraverseNone')
+            return
 
-        if isinstance(node, types.StringTypes):
-            return self.wrap(node)
-
-        # Simple caching to prevent re-traversal
-        if '__traversal' not in node:
-            # Extract location information if it's available
-            if node.get('loc'):
-                start = node['loc']['start']
-                self.line = self.start_line + start['line']
-                self.position = start['column']
-
-            if branch and 'type' in parent:
-                self.debug('TRAVERSE {parent[type]} -> {branch}:{node[type]}',
-                           node=node, parent=parent, branch=branch)
-            else:
-                self.debug('TRAVERSE {node[type]}', node=node)
-
-            self.debug_level += 1
-            result = self.wrap(self._traverse(node, source))
-            result.parse_node = node
-            self.debug_level -= 1
-            node['__traversal'] = result
-
-        return node['__traversal']
-
-    def _traverse(self, node, source=None):
-        if node.get('type') not in DEFINITIONS:
-            if node.get('type'):
-                key = 'unknown_node_types'
-                if key not in self.err.metadata:
-                    self.err.metadata[key] = defaultdict(int)
-
-                self.err.metadata[key][node['type']] += 1
-
-            return self.wrap(dirty='TraverseUnknown')
-
-        # Extract properties about the node that we're traversing
-        node_def = DEFINITIONS[node['type']]
-
-        # If we're supposed to establish a context, do it now
-        pushed_context = self.push_context(node_def)
-
-        # An action allows the traverser to make intelligent decisions
-        # based on the function of the code, rather than just the content.
-        # If an action is availble, run it and store the output.
-        action_result = None
-        if node_def.action:
-            action_result = node_def.action(self, node)
-            # Special case, for immediate literals, define a source
-            # property. Used for determining when literals are passed
-            # directly as arguments.
-            if node['type'] == 'Literal':
-                action_result.value.source = source
-
-        if action_result is None:
-            # Use the node definition to determine and subsequently
-            # traverse each of the branches.
-            for branch in node_def.branches:
-                if branch in node:
-                    if isinstance(node[branch], list):
-                        map(self.traverse, node[branch])
-                    else:
-                        self.traverse(node, branch)
-
-        if pushed_context:
-            self._pop_context()
-
-        # If there is an action and the action returned a value, it should be
-        # returned to the node traversal that initiated this node's traversal.
-        if node_def.returns:
-            if action_result is not None:
-                return action_result
-            return self.wrap(dirty='NoReturn')
-
-        return self.wrap(dirty='TraverseDefault')
-
-    def push_context(self, node):
-        if node.dynamic:
-            self._push_context()
-            return True
-        elif node.is_block:
-            self._push_context(context_type='block')
-            return True
-
-    def _push_context(self, context=None, context_type='default'):
-        """Push a lexical context onto the scope stack."""
-
-        if context is None:
-            context = JSContext(context_type, traverser=self)
-        self.contexts.append(context)
-
-    def _pop_context(self):
-        'Adds a variable context to the current interpretation frame'
-
-        assert len(self.contexts) > 1
-        self.contexts.pop()
-
-    def is_global(self, name):
-        'Returns whether a name is a global entity'
-        return name in GLOBAL_ENTITIES and not self.find_variable(name)
-
-    def _build_global(self, name, entity):
-        'Builds an object based on an entity from the predefined entity list'
-
-        entity.setdefault('name', name)
-
-        # Build out the wrapper object from the global definition.
-        result = self.wrap(hooks=entity)
-        result = actions._expand_globals(self, result)
-
-        if 'dangerous' in entity and not callable(entity['dangerous']):
-            # If it's callable, it will be processed later.
-            dangerous = entity['dangerous']
+        if branch and 'type' in parent:
+            self.debug('TRAVERSE {parent[type]} -> {branch}:{node[type]}',
+                       node=node, parent=parent, branch=branch)
         else:
-            dangerous = entity.get('dangerous_on_read')
-            if callable(dangerous):
-                dangerous = dangerous(result)
+            self.debug('TRAVERSE {node[type]}', node=node)
 
-        if dangerous:
-            kwargs = dict(
-                err_id=('js', 'traverser', 'dangerous_global'),
-                warning='Access to the `%s` global' % name,
-                description='Access to the `%s` property is '
-                            'deprecated for security or '
-                            'other reasons.' % name)
+        assert '__traversed' not in node
+        node['__traversed'] = True
 
-            if isinstance(dangerous, DESCRIPTION_TYPES):
-                kwargs['description'] = dangerous
-            elif isinstance(dangerous, dict):
-                kwargs.update(dangerous)
+        self.set_location(node)
 
-            self.warning(**kwargs)
+        try:
+            handler = self.node_handlers[node['type']]
+        except KeyError:
+            if self.err.debug_level:
+                self.error(err_id=('traverser', 'traverse', 'unknown_node'),
+                           error='Unknown node type: {[type]}'.format(node))
 
-        return result
+            log.exception('Unknown node type: {[type]}'.format(node))
+            key = 'unknown_node_types'
+            self.err.metadata.setdefault(key, defaultdict(int))
+            self.err.metadata[key][node['type']] += 1
+        else:
+            with self._debug_level:
+                result = handler(node, **kw)
+                if isinstance(result, (JSWrapper, JSValue)):
+                    result.parse_node = node
+                return result
 
-    def find_scope(self, scope_type, starting_at=0):
-        """Find the closest scope of the given type."""
-        for scope in islice(reversed(self.contexts), starting_at, None):
+    def find_scope(self, scope_type):
+        """Find the scope of the given type nearest to the top of the context
+        stack."""
+
+        for scope in reversed(self.contexts):
             if scope.context_type == scope_type:
                 return scope
         return self.contexts[0]
 
-    def find_variable(self, identifier, scope_type=None, starting_at=0):
-        """Find the variable with the given identifier in the nearest
-        scope. If `scope_type` is given, the nearest scope of that type is
-        returned unless the variable is found in a nearer scope of a different
-        type."""
-        for scope in islice(reversed(self.contexts), starting_at, None):
-            if scope.context_type == scope_type or scope.has_var(identifier):
+    def find_variable(self, identifier):
+        """Find the variable with the given identifier in the nearest scope
+        to the top of the context stack in which it is bound."""
+        for scope in reversed(self.contexts):
+            if identifier in scope:
                 return scope
 
-        if scope_type:
-            return self.contexts[0]
+        return self.contexts[0]
 
-    def get_variable(self, identifier, instantiate):
+    def get_variable(self, identifier, instantiate=True):
         """Return the wrapper for the variable with the given identifier,
-        in the nearest scope in which it exists. If it desn't exist, a dirty
+        in the nearest scope in which it exists. If it doesn't exist, a dirty
         wrapper is returned."""
 
-        scope = self.find_variable(identifier, scope_type='global')
+        scope = self.find_variable(identifier)
         if identifier in scope:
             return scope.get(identifier)
 
-        if identifier in GLOBAL_ENTITIES:
-            return self._build_global(identifier, GLOBAL_ENTITIES[identifier])
-
         return scope.get(identifier, instantiate=instantiate)
-
-    def declare_variable(self, name, value, type_='var'):
-        if type_ in ('var', 'const', ):
-            context = self.find_scope('default')
-        elif type_ == 'let':
-            context = self.find_scope('block')
-        else:
-            assert type_ == 'global'
-            # Look down through the lexical scope. If the variable being
-            # assigned is present in one of those objects, use that as the
-            # target context.
-            context = self.find_variable(name, scope_type='global')
-
-        context.set(name, value)
-        return value
 
     def _err_kwargs(self, kwargs):
         err_kwargs = {
-            'filename': self.filename,
-            'line': self.line,
-            'column': self.position,
+            'location': self.location,
             'context': self.context,
         }
         err_kwargs.update(kwargs)
         return err_kwargs
+
+    # Wrappers around the same-named reporting methods of our error bundle,
+    # which automatically set the location of the message to the location
+    # of the node currently being traversed.
 
     def report(self, *args, **kwargs):
         return self.err.report(self._err_kwargs({}),

@@ -32,7 +32,7 @@ class CompatTestCase(JSTestCase, RegexTestCase):
         """
 
         script = """
-        var x = Components.classes[""].createInstance(Components.interfaces.%s);
+        var x = Components.classes[""].createInstance(Ci.%s);
         x.%%s;
         """ % interface
 
@@ -66,8 +66,8 @@ class CompatTestCase(JSTestCase, RegexTestCase):
 
     def assert_compat_silent(self):
         """Assert that no compatibility messages have been raised."""
-        assert not any(self.compat_err.compat_summary.values()), \
-                'Got %s' % self.compat_err.compat_summary
+        assert not any(self.compat_err.compat_summary.values()), (
+            'Got %s' % self.compat_err.compat_summary)
 
     def assert_compat_error(self, type_='warning'):
         """Assert that a compat error was raised as a message of type `type_`.

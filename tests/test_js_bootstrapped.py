@@ -1,3 +1,5 @@
+import helper  # noqa
+
 from validator.errorbundler import ErrorBundle
 from validator.testcases import scripting
 

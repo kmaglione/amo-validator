@@ -51,7 +51,7 @@ class TestFunctionTraversal(TestCase):
         bar = foo;
         """)
         self.assert_var_eq('bar', 'first')
-        self.assert_var_eq('foo', 'second')
+        assert self.get_var('foo').startswith('second<dirty:')
 
     def test_function_expression_order(self):
         """Test that function expressions happen in the right time."""
@@ -64,7 +64,7 @@ class TestFunctionTraversal(TestCase):
         bar = foo;
         """)
         self.assert_var_eq('bar', 'first')
-        self.assert_var_eq('foo', 'second')
+        assert self.get_var('foo').startswith('second<dirty:')
 
     def test_nested_functions(self):
         """Test that nested functions are considered in the right order."""
@@ -76,7 +76,7 @@ class TestFunctionTraversal(TestCase):
             foo = "third";
         }
         """)
-        self.assert_var_eq('foo', 'second')
+        assert self.get_var('foo').startswith('second<dirty:')
 
 
 class TestTooMuchJS(TestCase):

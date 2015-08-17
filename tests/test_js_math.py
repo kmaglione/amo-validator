@@ -3,10 +3,6 @@ import math
 from js_helper import _do_test_scope, _do_test_raw
 
 
-INFINITY = float('inf')
-NEG_INFINITY = float('-inf')
-
-
 def test_abs():
     """Test that the abs() function works properly."""
     _do_test_scope("""
@@ -15,7 +11,8 @@ def test_abs():
         c = Math.abs(-Infinity);
     """, {'a': 5,
           'b': 5,
-          'c': INFINITY})
+          'c': float('inf')})
+
 
 def test_exp():
     """Test that the exp() function works properly."""
@@ -71,9 +68,9 @@ def test_ceil():
           'i': 0,
           # "j": -0,
           'k': True,
-          'l': INFINITY,
+          'l': float('inf'),
           'm': True,
-          'n': NEG_INFINITY,
+          'n': float('-inf'),
           'o': 1,
           'p': 0})
 
@@ -108,9 +105,9 @@ def test_floor():
           'i': 0,
           # "j": -0,
           'k': True,
-          'l': INFINITY,
+          'l': float('inf'),
           'm': True,
-          'n': NEG_INFINITY,
+          'n': float('-inf'),
           'o': 0,
           'p': -1})
 
@@ -182,8 +179,8 @@ def test_round():
         f = Math.round(-0.49),
         g = Math.round(-0.5),
         h = Math.round(-0.51),
-        i = Math.round(Infinity) == Infinity,
-        j = Math.round(-Infinity) == -Infinity;
+        i = Math.round(Infinity),
+        j = Math.round(-Infinity);
     """, {'a': 1,
           'b': 0,
           'c': 0,
@@ -192,8 +189,8 @@ def test_round():
           'f': 0,
           'g': 0,
           'h': -1,
-          'i': True,
-          'j': True})
+          'i': float('inf'),
+          'j': float('-inf')})
 
 
 def test_random():
@@ -215,7 +212,7 @@ def test_pow():
         e = Math.pow(123, 0);
     """, {'a': 1,
           'b': 4294967296,
-          'c': INFINITY,
+          'c': float('inf'),
           'd': 0,
           'e': 1})
 
@@ -229,9 +226,9 @@ def test_log():
         c = Math.log(Infinity),
         d = Math.log(-1);
     """, {'a': 0,
-          'b': NEG_INFINITY,
-          'c': INFINITY,
-          'd': None})
+          'b': float('-inf'),
+          'c': float('inf'),
+          'd': float('nan')})
 
 
 def test_min_max():
@@ -242,9 +239,9 @@ def test_min_max():
         min_b = Math.min(1, -1);
     var max_a = Math.max(Infinity, -Infinity),
         max_b = Math.max(1, -1);
-    """, {'min_a': NEG_INFINITY,
+    """, {'min_a': float('-inf'),
           'min_b': -1,
-          'max_a': INFINITY,
+          'max_a': float('inf'),
           'max_b': 1})
 
 
@@ -257,4 +254,3 @@ def test_math_infinity():
     var z = 10 >> y;
     """)
     # We really don't care about the output here.
-

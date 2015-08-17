@@ -1,7 +1,7 @@
+from __future__ import unicode_literals
+
 import sys
 from math import isnan
-
-from nose.tools import eq_
 
 from . import helper
 from .helper import MockXPI
@@ -24,7 +24,7 @@ def _do_test(path):
 
 
 def _do_test_raw(script, path='foo.js', bootstrap=False, ignore_pollution=True,
-                 detected_type=None, jetpack=False, instant=False):
+                 detected_type=None, jetpack=False, instant=True):
     """Perform a test on a JS file."""
 
     err = ErrorBundle(instant=instant)
@@ -41,7 +41,7 @@ def _do_test_raw(script, path='foo.js', bootstrap=False, ignore_pollution=True,
     validator.testcases.content._process_file(
         err, MockXPI(), path, script, path.lower(), not ignore_pollution)
     if err.final_context is not None:
-        print repr(err.final_context)
+        print 'CONTEXT', repr(err.final_context.keys())
 
     return err
 
@@ -66,7 +66,7 @@ def _do_real_test_raw(script, path='foo.js', versions=None, detected_type=None,
 
 
 def _get_var(err, name):
-    return err.final_context.data[name].get_literal_value()
+    return err.final_context.data[name].as_primitive()
 
 
 def _do_test_scope(script, vars):
@@ -82,16 +82,17 @@ def _do_test_scope(script, vars):
             var_val *= 100000
             var_val = round(var_val)
             var_val /= 100000
-        eq_(var_val, value)
+
+        assert var_val == value
 
 
 class TestCase(helper.TestCase):
     """A TestCase object with specialized functions for JS testing."""
 
-    def setUp(self):
+    def setup_method(self, method):
         self.file_path = 'foo.js'
         self.final_context = None
-        super(TestCase, self).setUp()
+        super(TestCase, self).setup_method(method)
 
     def run_script_from_file(self, path):
         """
@@ -111,30 +112,47 @@ class TestCase(helper.TestCase):
         if bootstrap:
             self.err.save_resource('em:bootstrap', 'true')
 
-        print 'Run script: %r' % script
+        if '\n' in script:
+            dashes = '-' * 30
+            print (' {dashes} Running Script {dashes}\n'
+                   '{script}\n'
+                   ' {dashes} -------------- {dashes}'.format(**locals()))
+        else:
+            print 'Running script: `{0}`'.format(script)
+
         validator.testcases.content._process_file(self.err, MockXPI(),
                                                   self.file_path, script,
                                                   self.file_path.lower(),
                                                   expose_pollution)
         if self.err.final_context is not None:
-            print repr(self.err.final_context)
+            print 'CONTEXT', repr(self.err.final_context.keys())
             self.final_context = self.err.final_context
 
     def get_wrapper(self, name):
         """Return the wrapper of a variable from the final script context."""
+        __tracebackhide__ = True
+
         assert name in self.final_context.data, (
             'Expected variable %r not in final context' % name)
         return self.final_context.data[name]
+
+    def get_value(self, name):
+        """Return the wrapper of a variable from the final script context."""
+        __tracebackhide__ = True
+
+        return self.get_wrapper(name).value
 
     def get_var(self, name):
         """
         Return the value of a variable from the final script context.
         """
-        return self.get_wrapper(name).get_literal_value()
+        __tracebackhide__ = True
+
+        return self.get_wrapper(name).as_primitive()
 
     def assert_var_eq(self, name, value):
         """
         Assert that the value of a variable from the final script context
         contains the value specified.
         """
-        eq_(self.get_var(name), value)
+        assert self.get_var(name) == value

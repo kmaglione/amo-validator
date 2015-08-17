@@ -16,6 +16,7 @@ def validate(path, format='json',
                                                 'app_versions.json'),
              determined=True,
              listed=True,
+             debug=False,
              expectation=PACKAGE_ANY,
              for_appversions=None,
              overrides=None,
@@ -54,7 +55,7 @@ def validate(path, format='json',
         during compatibility bumps. Defaults to `False`.
     """
 
-    bundle = ErrorBundle(listed=listed, determined=determined,
+    bundle = ErrorBundle(listed=listed, determined=determined, debug=debug,
                          overrides=overrides, for_appversions=for_appversions)
     bundle.save_resource('is_compat_test', compat_test)
 

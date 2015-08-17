@@ -1,4 +1,4 @@
-from nose.tools import eq_
+import pytest
 
 from .js_helper import TestCase, _do_test_raw
 
@@ -30,7 +30,7 @@ def test_get_as_num():
     """Test that _get_as_num performs as expected."""
 
     def test(input, output):
-        eq_(traverser.wrap(input).as_float(), output)
+        assert traverser.wrap(input).as_float() == output
 
     yield test, 1, 1
     yield test, 1.0, 1.0
@@ -58,7 +58,81 @@ def test_spidermonkey_warning():
     """).failed()
 
 
-def test_blocks_evaluated():
+@pytest.mark.parametrize('block', (
+    'function foo() { %s; }',
+    'function foo() { %s; yield 1; }',
+    'function foo() { yield %s; }',
+    'var foo = function () { %s; }',
+    'var foo = function () { %s; yield 1; }',
+    'function* foo() { %s; }',
+    'var foo = function* () { %s; }',
+    'var foo = function () %s',
+    'var foo = () => %s',
+    'var foo = () => { %s }',
+    'if (true) { %s }',
+    'if (true) ; else { %s }',
+    'while (true) { %s }',
+    'do { %s } while (true)',
+    'do {} while (%s)',
+
+    'for (;;) { %s }',
+
+    'for (x=%s;;) {}',
+    'for (let x=%s;;) {}',
+    'for (var x=%s;;) {}',
+    'for (const x=%s;;) {}',
+
+    'for (let x=foo;;) { %s }',
+    'for (var x=foo;;) { %s }',
+
+    'for (; %s;) {}',
+    'for (;; %s) {}',
+
+    'for (let x in y) { %s }',
+    'for (let x of y) { %s }',
+    'for (let x in (%s)) {}',
+    'for (let x of (%s)) {}',
+
+    '[%s for (x in thing)]',
+    '[%s for (x in thing) if (stuff)]',
+    '[x for (x in %s)]',
+    '[x for (x in %s) if (stuff)]',
+    '[x for (y in q) for (x in %s)]',
+    '[x for (y in q) for (x in %s) if (stuff)]',
+    '[x for (x in thing) if (%s)]',
+
+    '[for (x of thing) %s]',
+    '[for (x of thing) if (stuff) %s]',
+    '[for (x of %s) x]',
+    '[for (x of %s) if (stuff) x]',
+    '[for (x of %s) for (y of q) x]',
+    '[for (x of %s) for (y of q) if (stuff) x]',
+    '[for (x of thing) if (%s) x]',
+
+    'try { %s } catch (e) {}',
+    'try {} catch (e) { %s }',
+    'try {} finally { %s }',
+    'try {} catch (e if %s) {}',
+    'try {} catch (e if x) {} catch (e) { %s }',
+
+    'switch (%s) {default:}',
+    'switch (x) {case %s: 0;}',
+    'switch (x) {case y: %s;}',
+    'switch (x) {case z: ; case y: x; %s;}',
+    'switch (x) {case z: ; default: %s;}',
+
+    '(%s, x, y)',
+    '(x, %s, y)',
+    '(x, y, %s)',
+
+    'with (x) {%s}',
+    'with (%s) {}',
+
+    'let x = %s',
+    'var x = %s',
+    'const x = %s',
+))
+def test_blocks_evaluated(block):
     """
     Tests that blocks of code are actually evaluated under normal
     circumstances.
@@ -67,57 +141,11 @@ def test_blocks_evaluated():
     ID = ('javascript', 'dangerous_global', 'eval')
 
     EVIL = 'eval(evilStuff)'
-    BLOCKS = (
-        'function foo() { %s; }',
-        'function foo() { %s; yield 1; }',
-        'function foo() { yield %s; }',
-        'var foo = function () { %s; }',
-        'var foo = function () { %s; yield 1; }',
-        'function* foo() { %s; }',
-        'var foo = function* () { %s; }',
-        'var foo = function () %s',
-        'var foo = () => %s',
-        'var foo = () => { %s }',
-        'if (true) { %s }',
-        'if (true) ; else { %s }',
-        'while (true) { %s }',
-        'do { %s } while (true)',
 
-        'for (;;) { %s }',
-
-        'for (x=%s;;) {}',
-        'for (let x=%s;;) {}',
-        'for (var x=%s;;) {}',
-        'for (const x=%s;;) {}',
-
-        'for (let x=foo;;) { %s }',
-        'for (var x=foo;;) { %s }',
-
-        'for (; %s;) {}',
-        'for (;; %s) {}',
-
-        'for (let x in y) { %s }',
-        'for (let x of y) { %s }',
-        'for (let x in (%s)) {}',
-        'for (let x of (%s)) {}',
-
-        'try { %s } catch (e) {}',
-        'try {} catch (e) { %s }',
-        'try {} finally { %s }',
-        'try {} catch (e if %s) {}',
-        'let x = %s',
-        'var x = %s',
-        'const x = %s',
-    )
-
-    def test(block):
-        err = _do_test_raw(block % EVIL)
-        assert err.message_count == 1, \
-            'Missing expected failure for block: %s' % block
-        eq_(err.warnings[0]['id'], ID)
-
-    for block in BLOCKS:
-        yield test, block
+    err = _do_test_raw(block % EVIL)
+    assert err.message_count == 1, \
+        'Missing expected failure for block: %s' % block
+    assert err.warnings[0]['id'] == ID
 
 
 class TestTemplateString(TestCase):

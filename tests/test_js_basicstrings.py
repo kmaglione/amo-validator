@@ -37,7 +37,7 @@ def test_augconcat():
     """)
     assert not err.message_count
 
-    xyz_val = err.final_context.data['x'].get('xyz').get_literal_value()
+    xyz_val = err.final_context.data['x'].get('xyz').as_primitive()
     assert xyz_val == 'foobar'
 
 

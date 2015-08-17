@@ -1,6 +1,6 @@
 from validator.constants import BUGZILLA_BUG, MDN_DOC
 from validator.testcases.regex.compat import COMPAT_REGEXPS
-from validator.testcases.javascript.predefinedentities import GLOBAL_ENTITIES
+from ..javascript.jstypes import Global
 
 from . import build_definition
 
@@ -60,15 +60,14 @@ COMPAT_REGEXPS.append(
 )
 
 
-def fuel_error(this):
-    this.traverser.warning(
-        err_id=('js', 'traverser', 'dangerous_global'),
-        warning='The FUEL library is now deprecated.',
-        description='The FUEL library is now deprecated. You should use the '
-                    'add-ons SDK or Services.jsm. See %s for more information.'
-                    % MDN_DOC % 'Mozilla/Tech/Toolkit_API/FUEL',
-        for_appversions=FX40_DEFINITION,
-        tier=5,
-        compatibility_type='warning')
-
-GLOBAL_ENTITIES[u'Application'] = {'dangerous_on_read': fuel_error}
+Global.hook(('Application',),
+            overwritable=True,
+            on_get={
+    'err_id': ('js', 'traverser', 'dangerous_global'),
+    'warning': 'The FUEL library is now deprecated.',
+    'description': 'The FUEL library is now deprecated. You should use the '
+                   'add-ons SDK or Services.jsm. See %s for more information.'
+                   % MDN_DOC % 'Mozilla/Tech/Toolkit_API/FUEL',
+    'for_appversions': FX40_DEFINITION,
+    'tier': 5,
+    'compatibility_type': 'warning'})

@@ -296,14 +296,28 @@ class HTMLParser(markupbase.ParserBase):
             if not m:
                 break
             attrname, rest, attrvalue = m.group(1, 2, 3)
+            pos = ()
             if not rest:
                 attrvalue = None
-            elif attrvalue[:1] == '\'' == attrvalue[-1:] or \
-                 attrvalue[:1] == '"' == attrvalue[-1:]:
-                attrvalue = attrvalue[1:-1]
+            else:
+                # N.B.(Kris): Modified to include position start of attribute
+                # value.
+                start = m.start() + len(attrname) + len(rest) - len(attrvalue)
+
+                if attrvalue[:1] == '\'' == attrvalue[-1:] or \
+                     attrvalue[:1] == '"' == attrvalue[-1:]:
+                    start += 1
+                    attrvalue = attrvalue[1:-1]
+
+                line = rawdata.count('\n', 0, start) + self.lineno
+                try:
+                    column = start - rawdata.rindex('\n', 0, start)
+                except ValueError:
+                    column = start
+                pos = line, column
             if attrvalue:
                 attrvalue = self.unescape(attrvalue)
-            attrs.append((attrname.lower(), attrvalue))
+            attrs.append((attrname.lower(), attrvalue, pos))
             k = m.end()
 
         end = rawdata[k:endpos].strip()

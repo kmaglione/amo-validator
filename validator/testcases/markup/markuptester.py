@@ -3,11 +3,11 @@ import types
 
 from validator.python.HTMLParser import HTMLParser, HTMLParseError
 
-import validator.testcases.scripting as scripting
-import validator.unicodehelper as unicodehelper
-from validator.testcases.markup import csstester
+from validator import unicodehelper
+from validator.constants import PACKAGE_LANGPACK, PACKAGE_THEME
 from validator.contextgenerator import ContextGenerator
-from validator.constants import *
+from validator.testcases import scripting
+from validator.testcases.markup import csstester
 
 DEBUG = False
 
@@ -48,6 +48,7 @@ class MarkupParser(HTMLParser):
 
         self.xml_state = []
         self.xml_line_stack = []
+        self.xml_position_stack = []
         self.xml_buffer = []
         self.xbl = False
 
@@ -234,7 +235,7 @@ class MarkupParser(HTMLParser):
         if tag == 'prefwindow':
             # Flag <prefwindow> elements without IDs.
 
-            if not any((key == 'id') for key, val in attrs):
+            if not any((key == 'id') for key, val, pos in attrs):
                 self.err.warning(
                         err_id=('markup', 'starttag', 'prefwindow_id'),
                         warning='`<prefwindow>` elements must have IDs.',
@@ -324,6 +325,7 @@ class MarkupParser(HTMLParser):
         # would otherwise be handled by the standard parser flow.
         for attr in attrs:
             attr_name, attr_value = attr[0].lower(), attr[1]
+            position = attr[2]
 
             # We don't care about valueless attributes.
             if attr_value is None:
@@ -332,23 +334,6 @@ class MarkupParser(HTMLParser):
             if (attr_name == 'xmlns:xbl' and
                 attr_value == 'http://www.mozilla.org/xbl'):
                 self.xbl = True
-
-            # Test that an absolute URI isn't referenced in Jetpack 1.4.
-            if (self.is_jetpack and
-                attr_value.startswith('resource://') and
-                '-data/' in attr_value):
-                self.err.warning(
-                        err_id=('markup', 'starttag',
-                                'jetpack_abs_uri'),
-                        warning='Absolute URI referenced in Jetpack 1.4',
-                        description=('As of Jetpack 1.4, absolute URIs are no '
-                                     'longer allowed within add-ons.',
-                                     'See %s for more information.' %
-                                         JETPACK_URI_URL),
-                        filename=self.filename,
-                        line=self.line,
-                        context=self.context,
-                        compatibility_type='error')
 
             if (self.err.detected_type == PACKAGE_THEME and
                 attr_value.startswith(('data:', 'javascript:'))):
@@ -388,8 +373,8 @@ class MarkupParser(HTMLParser):
 
                 scripting.test_js_snippet(
                     err=self.err, data=attr_value,
-                    filename=self.filename, line=self.line,
-                    context=self.context)
+                    filename=self.filename, line=position[0],
+                    column=position[1], context=self.context)
 
 
             # Test for generic IDs
@@ -419,6 +404,7 @@ class MarkupParser(HTMLParser):
 
         self.xml_state.append(orig_tag)
         self.xml_line_stack.append(self.line)
+        self.xml_position_stack.append(None)
         self.xml_buffer.append(unicode(''))
 
     def handle_endtag(self, tag):
@@ -491,6 +477,7 @@ class MarkupParser(HTMLParser):
         data_buffer = self.xml_buffer.pop()
         old_state = self.xml_state.pop()
         old_line = self.xml_line_stack.pop()
+        old_position = self.xml_position_stack.pop() or (old_line, 0)
         script_type = True
         if old_state == 'script':
             script_type = self.xml_state_scripts.pop()
@@ -523,14 +510,14 @@ class MarkupParser(HTMLParser):
             if DEBUG:  # pragma: no cover
                 print 'Invalid markup nesting ------'
 
-        data_buffer = data_buffer.strip()
-
         # Perform analysis on collected data.
         if data_buffer:
             if tag == 'script' and not script_type:
                 scripting.test_js_snippet(err=self.err, data=data_buffer,
                                           filename=self.filename,
-                                          line=old_line, context=self.context)
+                                          line=old_position[0],
+                                          column=old_position[1],
+                                          context=self.context)
             elif tag == 'style':
                 csstester.test_css_file(self.err, self.filename, data_buffer,
                                         old_line)
@@ -574,6 +561,8 @@ class MarkupParser(HTMLParser):
         data = unicodehelper.decode(data)
 
         self.xml_buffer[-1] += data
+        if self.xml_position_stack[-1] is None:
+            self.xml_position_stack[-1] = self.getpos()
 
     def _format_args(self, args):
         """Formats a dict of HTML attributes to be in HTML attribute

@@ -1,10 +1,14 @@
 /testfiles
 /testfiles/*
-*.pyc
+*.py[co]
 .DS_Store
 .coverage
 .figleaf
-*.swp
+.cache
+__pycache__
+build/*
+dist/*
+*.sw?
 /validator/constants_local.py
 /src
 /extras/jslibs
@@ -13,3 +17,6 @@ dist/
 amo_validator.egg-info/
 nosetests.xml
 .tox/
+*.orig
+*.rej
+*.bak

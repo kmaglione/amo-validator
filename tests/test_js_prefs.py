@@ -47,25 +47,3 @@ def test_pref_dangerous_branch():
     assert _do_test_raw("""
     user_pref("extensions.getAddons.get.url", "http://evil.com/");
     """, path='defaults/preferences/prefs.js').failed()
-
-
-def test_pref_complex_code():
-    """
-    Test that calls to functions other than pref() or user_pref() in default
-    preference files throw warnings and that calls to pref() and user_pref()
-    don't.
-    """
-
-    assert not _do_test_raw("""
-    pref();
-    user_pref();
-    """, path='defaults/preferences/prefs.js').failed()
-
-    assert _do_test_raw("""
-    foo();
-    """, path='defaults/preferences/prefs.js').failed()
-
-    assert _do_test_raw("""
-    foo.bar();
-    """, path='defaults/preferences/prefs.js').failed()
-

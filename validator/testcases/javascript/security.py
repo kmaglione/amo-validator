@@ -1,52 +1,69 @@
 """Tests which relate to the overall security of the browser."""
+from __future__ import absolute_import, print_function, unicode_literals
 
 import re
 
 from validator.errorbundler import merge_description
 from ..regex.javascript import STRING_REGEXPS
-from .predefinedentities import (CONTRACT_ENTITIES, GLOBAL_ENTITIES,
-                                 INTERFACE_ENTITIES, INTERFACES,
-                                 build_quick_xpcom, hook_global,
-                                 hook_interface)
+from .bootstrapped import if_jetpack
+from .jstypes import Global, Hook, Interfaces
 from .preferences import BANNED_PREF_BRANCHES, BANNED_PREF_REGEXPS
+from .xpcom import CONTRACT_ENTITIES
 
 
-INTERFACE_ENTITIES.update({
-    u'nsIProcess': {
-        'dangerous': {
-            'warning':
-                'The use of nsIProcess is potentially dangerous and requires '
-                'careful review by an administrative reviewer.',
-            'editors_only': True,
-            'signing_help': 'Consider alternatives to directly launching '
-                            'executables, such as loading a URL with an '
-                            'appropriate external protocol handler, making '
-                            'network requests to a local service, or using '
-                            'the (as a last resort) `nsIFile.launch()` method '
-                            'to open a file with the appropriate application.',
-            'signing_severity': 'high',
-        }},
-})
+Interfaces.hook('nsIProcess', on_get={
+    'warning':
+        'The use of nsIProcess is potentially dangerous and requires '
+        'careful review by an administrative reviewer.',
+    'editors_only': True,
+    'signing_help': 'Consider alternatives to directly launching '
+                    'executables, such as loading a URL with an '
+                    'appropriate external protocol handler, making '
+                    'network requests to a local service, or using '
+                    'the (as a last resort) `nsIFile.launch()` method '
+                    'to open a file with the appropriate application.',
+    'signing_severity': 'high'})
 
-hook_interface(('nsIProtocolProxyService', 'registerFilter'),
-               dangerous={
-    'err_id': ('testcases_javascript_actions', 'predefinedentities',
-               'proxy_filter'),
-    'description': (
-        'Proxy filters can be used to direct arbitrary network '
-        'traffic through remote servers, and may potentially '
-        'be abused.',
-        'Additionally, to prevent conflicts, the `applyFilter` '
-        'method should always return its third argument in cases '
-        'when it is not supplying a specific proxy.'),
-    'signing_help': 'Due to the potential for unintended effects, '
-                    'any add-on which uses this API must undergo '
-                    'manual code review for at least one submission.',
-    'signing_severity': 'low'})
+Global.hook(('**', 'launch'), on_call={
+    'description': 'Use of the `nsIFile.launch()` method can be dangerous, '
+                   'and requires careful review.',
+    'editors_only': True})
+
+
+@Interfaces.hook
+class nsIProtocolProxyService(Hook):
+
+    @Hook.on_call
+    def registerFilter(this, args, callee):
+        return {
+            'description': (
+                'Proxy filters can be used to direct arbitrary network '
+                'traffic through remote servers, and may potentially '
+                'be abused.',
+                'Additionally, to prevent conflicts, the `applyFilter` '
+                'method should always return its third argument in cases '
+                'when it is not supplying a specific proxy.'),
+            'signing_help':
+                'Due to the potential for unintended effects, '
+                'any add-on which uses this API must undergo '
+                'manual code review for at least one submission.',
+            'signing_severity': 'low',
+        }
+
+
+@Global.hook(('document', 'loadOverlay'), 'on_call')
+def loadOverlay(this, args, callee):
+    return not args[0].as_str().lower().startswith(('chrome:', 'resource:'))
+
+
+Interfaces.hook('nsIDOMGeoGeolocation',
+                on_get='Use of the geolocation API by add-ons requires '
+                       'prompting users for consent.')
 
 
 # Modules.
 
+@Global.hook(('Components', 'utils', 'import'), 'return')
 def check_import(this, args, callee):
     """Check Components.utils.import statements for dangerous modules."""
 
@@ -61,9 +78,6 @@ def check_import(this, args, callee):
                  'warning': 'Potentially dangerous JSM imported.'},
                 DANGEROUS_MODULES[module])
             this.traverser.warning(**kw)
-
-hook_global((u'Components', u'utils', u'import'),
-            dangerous=check_import)
 
 
 DANGEROUS_MODULES = {}
@@ -91,41 +105,35 @@ LOW_LEVEL_SDK_MODULES = {
 }
 
 
-def check_require(this, args, callee):
-    """
-    Tests for unsafe uses of `require()` in SDK add-ons.
-    """
+@Global.extend
+class JetpackModule(Hook):
 
-    err = this.traverser.err
-    if not err.metadata.get('is_jetpack') and len(args):
-        return
+    @Hook.on_call(scope_filter=if_jetpack)
+    def require(this, args, callee):
+        """Test for unsafe uses of `require()` in SDK add-ons."""
 
-    module = args[0].as_primitive()
-    if not isinstance(module, basestring):
-        return
+        module = args[0].as_primitive()
+        if not isinstance(module, basestring):
+            return
 
-    if module.startswith('sdk/'):
-        module = module[len('sdk/'):]
+        if module.startswith('sdk/'):
+            module = module[len('sdk/'):]
 
-    if module in LOW_LEVEL_SDK_MODULES:
-        err.metadata['requires_chrome'] = True
-        return {'warning': 'Use of low-level or non-SDK interface',
-                'description': 'Your add-on uses an interface which bypasses '
-                               'the high-level protections of the add-on SDK. '
-                               'This interface should be avoided, and its use '
-                               'may significantly complicate your review '
-                               'process.'}
+        if module in LOW_LEVEL_SDK_MODULES:
+            this.traverser.err.metadata['requires_chrome'] = True
+            return {'warning': 'Use of low-level or non-SDK interface',
+                    'description':
+                        'Your add-on uses an interface which bypasses '
+                        'the high-level protections of the add-on SDK. '
+                        'This interface should be avoided, and its use '
+                        'may significantly complicate your review '
+                        'process.'}
 
-    if module in DEPRECATED_SDK_MODULES:
-        return merge_description(
-            {'err_id': ('testcases_javascript', 'security', 'sdk_import'),
-             'warning': 'Deprecated SDK module imported'},
-            DEPRECATED_SDK_MODULES[module])
-
-
-GLOBAL_ENTITIES.update({
-    u'require': {'dangerous': check_require},
-})
+        if module in DEPRECATED_SDK_MODULES:
+            return merge_description(
+                {'err_id': ('testcases_javascript', 'security', 'sdk_import'),
+                 'warning': 'Deprecated SDK module imported'},
+                DEPRECATED_SDK_MODULES[module])
 
 
 # Certificates.
@@ -144,17 +152,15 @@ DANGEROUS_CERT_DB = {
     'signing_severity': 'high',
 }
 
-INTERFACE_ENTITIES.update(
-    (interface, {'dangerous': DANGEROUS_CERT_DB})
-    for interface in ('nsIX509CertDB', 'nsIX509CertDB2', 'nsIX509CertList',
-                      'nsICertOverrideService'))
+for interface in ('nsIX509CertDB', 'nsIX509CertDB2', 'nsIX509CertList',
+                  'nsICertOverrideService'):
+    Interfaces.hook(interface, on_get=DANGEROUS_CERT_DB)
 
 CONTRACT_ENTITIES.update({
     contract: DANGEROUS_CERT_DB
     for contract in ('@mozilla.org/security/x509certdb;1',
                      '@mozilla.org/security/x509certlist;1',
                      '@mozilla.org/security/certoverride;1')})
-
 
 # JS ctypes.
 
@@ -179,9 +185,7 @@ CTYPES_DANGEROUS = {
                      'submission.'),
     'signing_severity': 'high'}
 
-GLOBAL_ENTITIES.update({
-    u'ctypes': {'dangerous': CTYPES_DANGEROUS},
-})
+Global.hook('ctypes', on_get=CTYPES_DANGEROUS)
 
 DANGEROUS_MODULES.update({
     'resource://gre/modules/ctypes.jsm': CTYPES_DANGEROUS,
@@ -206,22 +210,22 @@ SECURITY_PREF_MESSAGE = {
 
 BANNED_PREF_BRANCHES.extend([
     # Security and update preferences
-    (u'app.update.', SECURITY_PREF_MESSAGE),
-    (u'browser.addon-watch.', SECURITY_PREF_MESSAGE),
-    (u'capability.policy.', None),
-    (u'datareporting.', SECURITY_PREF_MESSAGE),
+    ('app.update.', SECURITY_PREF_MESSAGE),
+    ('browser.addon-watch.', SECURITY_PREF_MESSAGE),
+    ('capability.policy.', None),
+    ('datareporting.', SECURITY_PREF_MESSAGE),
 
-    (u'extensions.blocklist.', SECURITY_PREF_MESSAGE),
-    (u'extensions.checkCompatibility', None),
-    (u'extensions.getAddons.', SECURITY_PREF_MESSAGE),
-    (u'extensions.update.', SECURITY_PREF_MESSAGE),
+    ('extensions.blocklist.', SECURITY_PREF_MESSAGE),
+    ('extensions.checkCompatibility', None),
+    ('extensions.getAddons.', SECURITY_PREF_MESSAGE),
+    ('extensions.update.', SECURITY_PREF_MESSAGE),
 
     # Let's see if we can get away with this...
     # Changing any preference in this branch should result in a
     # warning. However, this substring may turn out to be too
     # generic, and lead to spurious warnings, in which case we'll
     # have to single out sub-branches.
-    (u'security.', SECURITY_PREF_MESSAGE),
+    ('security.', SECURITY_PREF_MESSAGE),
 ])
 
 BANNED_PREF_REGEXPS.extend([
@@ -237,15 +241,13 @@ MARIONETTE_MESSAGE = {
                    'in extensions. Please remove them.',
 }
 
-GLOBAL_ENTITIES.update({
-    u'MarionetteComponent': {'dangerous_on_read': MARIONETTE_MESSAGE},
-    u'MarionetteServer': {'dangerous_on_read': MARIONETTE_MESSAGE},
-})
+Global.hook('MarionetteComponent', on_get=MARIONETTE_MESSAGE)
+Global.hook('MarionetteServer', on_get=MARIONETTE_MESSAGE)
 
 BANNED_PREF_BRANCHES.extend([
-    (u'marionette.force-local', MARIONETTE_MESSAGE),
-    (u'marionette.defaultPrefs.enabled', MARIONETTE_MESSAGE),
-    (u'marionette.defaultPrefs.port', MARIONETTE_MESSAGE),
+    ('marionette.force-local', MARIONETTE_MESSAGE),
+    ('marionette.defaultPrefs.enabled', MARIONETTE_MESSAGE),
+    ('marionette.defaultPrefs.port', MARIONETTE_MESSAGE),
 ])
 
 STRING_REGEXPS.extend([
@@ -257,7 +259,7 @@ STRING_REGEXPS.extend([
 
 # Windows Registry.
 
-REGISTRY_WRITE = {'dangerous': {
+REGISTRY_WRITE = {
     'err_id': ('testcases_javascript_actions',
                'windows_registry',
                'write'),
@@ -272,32 +274,14 @@ REGISTRY_WRITE = {'dangerous': {
         'API exists, we strongly discourage making any changes which affect '
         'the system outside of the browser.'),
     'signing_severity': 'medium',
-    'editors_only': True}}
+    'editors_only': True,
+}
 
 
-def registry_key(write=False):
-    """Represents a function which returns a registry key object."""
-    res = {'return': lambda this, args, callee: (
-        build_quick_xpcom('createInstance', 'nsIWindowMediator',
-                          this.traverser, wrapper=True))}
-    if write:
-        res.update(REGISTRY_WRITE)
-
-    return res
-
-INTERFACES.update({
-    'nsIWindowsRegKey': {'value': {u'create': REGISTRY_WRITE,
-                                   u'createChild': registry_key(write=True),
-                                   u'openChild': registry_key(),
-                                   u'writeBinaryValue': REGISTRY_WRITE,
-                                   u'writeInt64Value': REGISTRY_WRITE,
-                                   u'writeIntValue': REGISTRY_WRITE,
-                                   u'writeStringValue': REGISTRY_WRITE}},
-})
-
-INTERFACE_ENTITIES.update({
-    u'nsIWindowsRegKey': {
-        'dangerous': {
+@Interfaces.hook
+class nsIWindowsRegKey(Hook):
+    class Meta:
+        on_get = {
             'signing_help':
                 'The information stored in many standard registry '
                 'keys is available via built-in Firefox APIs, '
@@ -309,40 +293,50 @@ INTERFACE_ENTITIES.update({
             'signing_severity': 'low',
             'editors_only': True,
             'description': 'Access to the registry is potentially dangerous, '
-                           'and should be reviewed with special care.'}},
-})
+                           'and should be reviewed with special care.'}
+
+    create = {'on_get': REGISTRY_WRITE}
+    writeBinaryValue = {'on_get': REGISTRY_WRITE}
+    writeInt64Value = {'on_get': REGISTRY_WRITE}
+    writeIntValue = {'on_get': REGISTRY_WRITE}
+    writeStringValue = {'on_get': REGISTRY_WRITE}
+
+    @Hook.return_(on_get=REGISTRY_WRITE)
+    def createChild(this, args, callee):
+        return this.traverser.wrap().query_interface('nsIWindowsRegKey')
+
+    def openChild(this, args, callee):
+        return this.traverser.wrap().query_interface('nsIWindowsRegKey')
 
 
 # Add-on Manager.
 
 ADDON_INSTALL_METHOD = {
-    'value': {},
-    'dangerous': {
-        'description': (
-            'Add-ons may install other add-ons only by user consent. Any '
-            'such installations must be carefully reviewed to ensure '
-            'their safety.'),
-        'editors_only': True,
-        'signing_help': (
-            'Rather than directly install other add-ons, you should offer '
-            'users the opportunity to install them via the normal web install '
-            'process, using an install link or button connected to the '
-            '`InstallTrigger` API: '
-            'https://developer.mozilla.org/en-US/docs/Web/API/InstallTrigger',
-            'Updates to existing add-ons should be provided via the '
-            'install.rdf `updateURL` mechanism.'),
-        'signing_severity': 'high'},
+    'description': (
+        'Add-ons may install other add-ons only by user consent. Any '
+        'such installations must be carefully reviewed to ensure '
+        'their safety.'),
+    'editors_only': True,
+    'signing_help': (
+        'Rather than directly install other add-ons, you should offer '
+        'users the opportunity to install them via the normal web install '
+        'process, using an install link or button connected to the '
+        '`InstallTrigger` API: '
+        'https://developer.mozilla.org/en-US/docs/Web/API/InstallTrigger',
+        'Updates to existing add-ons should be provided via the '
+        'install.rdf `updateURL` mechanism.'),
+    'signing_severity': 'high',
 }
 
-GLOBAL_ENTITIES.update({
-    u'AddonManager': {
-        'readonly': False,
-        'value': {
-            u'autoUpdateDefault': {'readonly': SECURITY_PREF_MESSAGE},
-            u'checkUpdateSecurity': {'readonly': SECURITY_PREF_MESSAGE},
-            u'checkUpdateSecurityDefault': {'readonly': SECURITY_PREF_MESSAGE},
-            u'updateEnabled': {'readonly': SECURITY_PREF_MESSAGE},
-            u'getInstallForFile': ADDON_INSTALL_METHOD,
-            u'getInstallForURL': ADDON_INSTALL_METHOD,
-            u'installAddonsFromWebpage': ADDON_INSTALL_METHOD}},
-})
+
+@Global.hook
+class AddonManager(Hook):
+
+    autoUpdateDefault = {'on_set': SECURITY_PREF_MESSAGE}
+    checkUpdateSecurity = {'on_set': SECURITY_PREF_MESSAGE}
+    checkUpdateSecurityDefault = {'on_set': SECURITY_PREF_MESSAGE}
+    updateEnabled = {'on_set': SECURITY_PREF_MESSAGE}
+
+    getInstallForFile = {'on_call': ADDON_INSTALL_METHOD}
+    getInstallForURL = {'on_call': ADDON_INSTALL_METHOD}
+    installAddonsFromWebpage = {'on_call': ADDON_INSTALL_METHOD}

@@ -4,7 +4,8 @@ from validator.testcases.javascript import traverser
 from validator.testcases.javascript.jsshell import get_tree
 
 
-def test_js_file(err, filename, data, line=0, context=None, pollutable=False):
+def test_js_file(err, filename, data, line=1, column=0, context=None,
+                 pollutable=False):
     'Test a JS file by parsing and analyzing its tokens.'
 
     if err.detected_type == PACKAGE_THEME:
@@ -33,7 +34,8 @@ def test_js_file(err, filename, data, line=0, context=None, pollutable=False):
     if context is None:
         context = ContextGenerator(data)
 
-    t = traverser.Traverser(err, filename, line, context=context,
+    t = traverser.Traverser(err, filename, start_line=line,
+                            start_column=column, context=context,
                             pollutable=pollutable,
                             is_jsm=(filename.endswith('.jsm') or
                                     'EXPORTED_SYMBOLS' in data))
@@ -44,7 +46,7 @@ def test_js_file(err, filename, data, line=0, context=None, pollutable=False):
         err.set_tier(before_tier)
 
 
-def test_js_snippet(err, data, filename, line=0, context=None):
+def test_js_snippet(err, data, filename, line=1, column=0, context=None):
     'Process a JS snippet by passing it through to the file tester.'
 
     if not data:
@@ -54,4 +56,6 @@ def test_js_snippet(err, data, filename, line=0, context=None):
     # when return statements exist without a corresponding function.
     data = '(function(){%s\n})()' % data
 
-    test_js_file(err, filename, data, line, context, pollutable=False)
+    test_js_file(err, filename, data, line=line,
+                 column=column - len('function(){'),
+                 context=context, pollutable=False)

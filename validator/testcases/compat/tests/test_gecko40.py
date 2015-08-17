@@ -30,7 +30,7 @@ class TestFX40Compat(CompatTestCase):
 
     def test_fuelIApplication(self):
         self.run_script_for_compat("""
-            var Application = Components
+            var foo = Components
                 .classes["@mozilla.org/fuel/application;1"]
                 .getService(Components.interfaces.fuelIApplication);
         """)
@@ -39,7 +39,7 @@ class TestFX40Compat(CompatTestCase):
 
     def test_extIApplication(self):
         self.run_script_for_compat("""
-            var Application = Components
+            var foo = Components
                 .classes["@mozilla.org/fuel/application;1"]
                 .getService(Components.interfaces.extIApplication);
         """)

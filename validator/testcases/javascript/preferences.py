@@ -1,11 +1,12 @@
+from __future__ import absolute_import, print_function, unicode_literals
+
 import re
 
 from validator.errorbundler import maybe_tuple, merge_description
 from validator.decorator import define_post_init
 from validator.testcases.regex import javascript as regex_javascript
 from validator.testcases.regex.javascript import JSRegexTest, STRING_REGEXPS
-from .instanceactions import INSTANCE_DEFINITIONS
-from .predefinedentities import GLOBAL_ENTITIES, INTERFACES, build_quick_xpcom
+from .jstypes import Global, Interfaces
 
 
 PREFERENCE_ERROR_ID = 'testcases_regex', 'string', 'preference'
@@ -24,7 +25,7 @@ NETWORK_PREF_MESSAGE = {
 
 BANNED_PREF_BRANCHES = [
     # Network
-    (u'network.proxy.autoconfig_url', {
+    ('network.proxy.autoconfig_url', {
         'description':
             'As many add-ons have reason to change the proxy autoconfig URL, '
             'and only one at a time may do so without conflict, extensions '
@@ -37,23 +38,23 @@ BANNED_PREF_BRANCHES = [
             'filters, as described above. This preference should not be '
             'set, except directly by end users.',
         'signing_severity': 'low'}),
-    (u'network.proxy.', NETWORK_PREF_MESSAGE),
-    (u'network.http.', NETWORK_PREF_MESSAGE),
-    (u'network.websocket.', NETWORK_PREF_MESSAGE),
+    ('network.proxy.', NETWORK_PREF_MESSAGE),
+    ('network.http.', NETWORK_PREF_MESSAGE),
+    ('network.websocket.', NETWORK_PREF_MESSAGE),
 
     # Other
-    (u'browser.preferences.instantApply', None),
+    ('browser.preferences.instantApply', None),
 
-    (u'extensions.alwaysUnpack', None),
-    (u'extensions.bootstrappedAddons', None),
-    (u'extensions.dss.', None),
-    (u'extensions.installCache', None),
-    (u'extensions.lastAppVersion', None),
-    (u'extensions.pendingOperations', None),
+    ('extensions.alwaysUnpack', None),
+    ('extensions.bootstrappedAddons', None),
+    ('extensions.dss.', None),
+    ('extensions.installCache', None),
+    ('extensions.lastAppVersion', None),
+    ('extensions.pendingOperations', None),
 
-    (u'general.useragent.', None),
+    ('general.useragent.', None),
 
-    (u'nglayout.debug.disable_xul_cache', None),
+    ('nglayout.debug.disable_xul_cache', None),
 ]
 
 BANNED_PREF_REGEXPS = []
@@ -61,9 +62,14 @@ BANNED_PREF_REGEXPS = []
 PREF_REGEXPS = []
 
 
-# For tests in literal strings, add help text suggesting passing the
-# preference directly to preference getter functions.
 def add_pref_help(desc):
+    """Add help text to an error description suggesting passing the preference
+    directly to preference getter functions.
+
+    This is used to add additional help text to warnings about bare preference
+    string literals which would not apply if said literal is being passed
+    directly to a known preference API method."""
+
     desc = desc.copy()
     for key in 'description', 'signing_help':
         if key in desc:
@@ -79,6 +85,11 @@ PREF_STRING_HELP = (
 
 @define_post_init
 def pref_tester():
+    """Create a JSRegexTest instance based on the final values in the
+    PREF_REGEXPS, BANNED_PREF_REGEXPS, and BANNED_PREF_BRANCHES definitions,
+    and add most of the resulting expressions to the bare JS string
+    tester as well."""
+
     # Match exact preference names from BANNED_PREF_REGEXPS.
     PREF_REGEXPS.extend(
         (pattern,
@@ -123,14 +134,15 @@ def validate_pref(*args, **kw):
 
 # Preference APIs.
 
+@Global.hook(('**', 'getBranch'), 'return')
+@Global.hook(('**', 'getDefaultBranch'), 'return')
 def create_preference_branch(this, args, callee):
     """Creates a preference branch, which can be used for testing composed
     preference names."""
 
     if args:
-        if args[0].is_literal():
-            res = build_quick_xpcom('createInstance', 'nsIPrefBranch',
-                                    this.traverser, wrapper=True)
+        if args[0].is_literal:
+            res = this.traverser.wrap().query_interface('nsIPrefBranch')
             res.hooks['preference_branch'] = args[0].as_str()
             return res
 
@@ -147,7 +159,7 @@ def drop_pref_messages(wrapper):
 
     traverser = wrapper.traverser
 
-    if wrapper.value.source == 'arguments':
+    if wrapper.parse_node['type'] == 'Literal':
         for msg in wrapper.value.messages:
             if (msg['id'] == PREFERENCE_ERROR_ID and
                     (msg['file'], msg['line']) == (
@@ -155,24 +167,40 @@ def drop_pref_messages(wrapper):
                 traverser.err.drop_message(msg)
 
 
+nsIPrefBranch = Interfaces.hook('nsIPrefBranch')
+
+
+@nsIPrefBranch.hook('getBoolPref', 'on_call')
+@nsIPrefBranch.hook('getCharPref', 'on_call')
+@nsIPrefBranch.hook('getChildList', 'on_call')
+@nsIPrefBranch.hook('getComplexValue', 'on_call')
+@nsIPrefBranch.hook('getFloatPref', 'on_call')
+@nsIPrefBranch.hook('getIntPref', 'on_call')
+@nsIPrefBranch.hook('getPrefType', 'on_call')
+@nsIPrefBranch.hook('prefHasUserValue', 'on_call')
 def get_preference(this, args, callee):
-    """Tests get preference calls, and removes preference write warnings
+    """Test get preference calls, and remove preference write warnings
     when they are not necessary."""
 
-    if len(args) >= 1:
-        if args[0].is_clean_literal():
-            drop_pref_messages(args[0])
+    if args and args[0].is_clean_literal:
+        drop_pref_messages(args[0])
 
 
+@nsIPrefBranch.hook('setBoolPref', 'on_call')
+@nsIPrefBranch.hook('setCharPref', 'on_call')
+@nsIPrefBranch.hook('setComplexValue', 'on_call')
+@nsIPrefBranch.hook('setIntPref', 'on_call')
+@nsIPrefBranch.hook('clearUserPref', 'on_call')
+@nsIPrefBranch.hook('deleteBranch', 'on_call')
+@nsIPrefBranch.hook('resetBranch', 'on_call')
 def set_preference(this, args, callee):
-    """Tests set preference calls for non-root preferences branches against
-    dangerous values."""
+    """Test set preference calls against dangerous values."""
 
     if len(args) < 1:
         return
 
     arg = args[0]
-    if arg.is_literal():
+    if arg.is_literal:
         parent = getattr(callee, 'parent', this)
         pref = arg.as_str()
 
@@ -181,7 +209,7 @@ def set_preference(this, args, callee):
         branch = parent.hooks.get('preference_branch')
         if branch:
             pref = branch + pref
-        elif arg.is_clean_literal():
+        elif arg.is_clean_literal:
             drop_pref_messages(arg)
 
         kw = {'err_id': ('testcases_javascript_actions',
@@ -191,14 +219,19 @@ def set_preference(this, args, callee):
         validate_pref(pref, traverser=this.traverser, extra=kw, wrapper=arg)
 
 
+def default_prefs_file(traverser):
+    return traverser.filename.startswith('defaults/preferences/')
+
+
+@Global.hook('pref', 'on_call', scope_filter=default_prefs_file)
+@Global.hook('user_pref', 'on_call', scope_filter=default_prefs_file)
 def call_pref(this, args, callee):
     """
     Handler for pref() and user_pref() calls in defaults/preferences/*.js files
     to ensure that they don't touch preferences outside of the "extensions."
     branch.
     """
-
-    if this.traverser.filename.startswith('defaults/preferences/') and args:
+    if args:
         set_preference(this, args, callee)
         return test_preference(args[0].as_str())
 
@@ -215,44 +248,12 @@ def test_preference(value):
             'distinct string unique to and indicative of your add-on.')
 
 
-INSTANCE_DEFINITIONS.update({
-    'getBranch': create_preference_branch,
-    'getDefaultBranch': create_preference_branch,
-})
-
-INTERFACES.update({
-    u'nsIPrefBranch': {
-        'value': dict(
-            tuple((method, {'return': set_preference})
-                  for method in (u'setBoolPref',
-                                 u'setCharPref',
-                                 u'setComplexValue',
-                                 u'setIntPref',
-                                 u'clearUserPref',
-                                 u'deleteBranch',
-                                 u'resetBranch')) +
-            tuple((method, {'return': get_preference})
-                  for method in (u'getBoolPref',
-                                 u'getCharPref',
-                                 u'getChildList',
-                                 u'getComplexValue',
-                                 u'getFloatPref',
-                                 u'getIntPref',
-                                 u'getPrefType',
-                                 u'prefHasUserValue')))},
-})
-
-GLOBAL_ENTITIES.update({
+Global.hook('Preferences', {
     # From Preferences.jsm.
     # TODO: Support calls that return instances of this object which
     # operate on non-root branches.
-    u'Preferences': {'value': {
-        u'get': {'return': get_preference},
-        u'reset': {'return': set_preference},
-        u'resetBranch': {'return': set_preference},
-        u'set': {'return': set_preference}}},
-
-    # Preference creation in pref defaults files.
-    u'pref': {'dangerous': call_pref},
-    u'user_pref': {'dangerous': call_pref},
+    'get': {'on_call': get_preference},
+    'reset': {'on_call': set_preference},
+    'resetBranch': {'on_call': set_preference},
+    'set': {'on_call': set_preference},
 })

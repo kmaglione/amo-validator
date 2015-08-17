@@ -115,9 +115,13 @@ class ErrorBundle(object):
     """
 
     def __init__(self, determined=True, listed=True, instant=False,
-                 overrides=None, for_appversions=None):
+                 overrides=None, for_appversions=None, debug=0):
 
         self.handler = None
+
+        self.debug_level = debug
+        if debug == 0 and constants.IN_TESTS:
+            self.debug_level = 1
 
         self.errors = []
         self.warnings = []
@@ -159,36 +163,61 @@ class ErrorBundle(object):
     def _message(type_, message_type):
         def wrap(self, *args, **kwargs):
             message = {
-                'id': kwargs.get('err_id') or args[0],
-                'message': kwargs.get(message_type) or args[1],
-                'description': kwargs.get('description',
-                                          args[2] if len(args) > 2 else None),
-                # Filename is never None.
-                'file': kwargs.get('filename',
-                                   args[3] if len(args) > 3 else ''),
-                'line': kwargs.get('line',
-                                   args[4] if len(args) > 4 else None),
-                'column': kwargs.get('column',
-                                     args[5] if len(args) > 5 else None),
-                # If true, the message should only be shown to editors.
-                'editors_only': kwargs.get('editors_only', False),
+                'description': (),
+                'file': '',
+                'editors_only': False,
             }
-            for field in ('tier', 'for_appversions', 'compatibility_type', ):
-                message[field] = kwargs.get(field)
+
+            if 'location' in kwargs:
+                loc = kwargs['location']
+                message.update({'file': loc.file,
+                                'line': loc.line,
+                                'column': loc.column})
+
+            # Has to go.
+            if 'err_id' in kwargs:
+                kwargs['id'] = kwargs['err_id']
+            if 'filename' in kwargs:
+                kwargs['file'] = kwargs['filename']
+            if message_type in kwargs:
+                kwargs['message'] = kwargs[message_type]
+
+            positional_args = ('id',
+                               'message',
+                               'description',
+                               'file',
+                               'line',
+                               'column')
+
+            keys = positional_args + (
+                'tier',
+                'for_appversions',
+                'compatibility_type',
+                'editors_only',
+            )
+
+            # This is absurd.
+            # Copy positional args into the kwargs dict, if they're missing.
+            for key, arg in zip(positional_args, args):
+                assert key not in kwargs
+                kwargs[key] = arg
+
+            for key in keys:
+                message.setdefault(key, None)
+                if key in kwargs:
+                    message[key] = kwargs[key]
 
             if 'signing_severity' in kwargs:
                 severity = kwargs['signing_severity']
-
                 assert severity in SIGNING_SEVERITIES
 
-                if not kwargs.get('from_merge'):
-                    self.signing_summary[severity] += 1
+                self.signing_summary[severity] += 1
                 message['signing_severity'] = severity
+
             if 'signing_help' in kwargs:
                 message['signing_help'] = kwargs['signing_help']
 
             self._save_message(getattr(self, type_), type_, message,
-                               from_merge=kwargs.get('from_merge'),
                                context=kwargs.get('context'))
             return message
 
@@ -300,9 +329,8 @@ class ErrorBundle(object):
     def message_count(self):
         return len(self.errors) + len(self.warnings) + len(self.notices)
 
-    def _save_message(self, stack, type_, message, context=None,
-                      from_merge=False):
-        'Stores a message in the appropriate message stack.'
+    def _save_message(self, stack, type_, message, context=None):
+        """Store a message in the appropriate message stack."""
 
         uid = uuid.uuid4().hex
         message['uid'] = uid
@@ -347,7 +375,7 @@ class ErrorBundle(object):
             message['tier'] = self.tier
 
         # Build out the compatibility summary if possible.
-        if message['compatibility_type'] and not from_merge:
+        if message['compatibility_type']:
             self.compat_summary['%ss' % message['compatibility_type']] += 1
 
         # Build out the message tree entry.

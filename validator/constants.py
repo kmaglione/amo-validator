@@ -49,9 +49,6 @@ with open(os.path.join(os.path.dirname(__file__), 'app_versions.json')) as avs:
 BUGZILLA_BUG = 'https://bugzil.la/%d'
 MDN_DOC = 'https://developer.mozilla.org/docs/%s'
 
-JETPACK_URI_URL = 'https://wiki.mozilla.org/Labs/Jetpack/Release_Notes/' \
-                      '1.4#Known_Issues'
-
 # The maximum size of any string in JS analysis.
 MAX_STR_SIZE = 1024 * 24  # 24KB
 

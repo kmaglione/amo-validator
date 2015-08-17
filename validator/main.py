@@ -38,25 +38,26 @@ def main():
                         choices=('text', 'json'),
                         help='The output format that you expect',
                         required=False)
+    parser.add_argument('-D',
+                        '--debug',
+                        action='store_true',
+                        help="""Runs extra consistency checks, and in certain
+                        circumstance prints more verbose debugging output.""")
     parser.add_argument('-v',
                         '--verbose',
-                        action='store_const',
-                        const=True,
+                        action='store_true',
                         help="""If the output format supports it, makes
                         the analysis summary include extra info.""")
     parser.add_argument('--boring',
-                        action='store_const',
-                        const=True,
+                        action='store_true',
                         help="""Activating this flag will remove color
                         support from the terminal.""")
     parser.add_argument('--determined',
-                        action='store_const',
-                        const=True,
+                        action='store_true',
                         help="""This flag will continue running tests in
                         successive tests even if a lower tier fails.""")
     parser.add_argument('--selfhosted',
-                        action='store_const',
-                        const=True,
+                        action='store_true',
                         help="""Indicates that the addon will not be
                         hosted on addons.mozilla.org. This allows the
                         <em:updateURL> element to be set.""")
@@ -125,6 +126,7 @@ def main():
                             approved_applications=args.approved_applications,
                             determined=args.determined,
                             listed=not args.selfhosted,
+                            debug=args.debug,
                             overrides=overrides,
                             for_appversions=for_appversions,
                             expectation=expectation,

@@ -1,4 +1,4 @@
-from nose.tools import eq_
+import pytest
 
 from js_helper import _do_test_raw, TestCase
 
@@ -67,17 +67,18 @@ def test_sql_methods():
     err = _do_test_raw("""
         x.executeSimpleSQL("foo " + y);
     """)
-    eq_(err.warnings[0]['id'][-1], 'executeSimpleSQL_dynamic')
+    assert err.warnings[0]['id'][-1] == 'executeSimpleSQL_dynamic'
 
     err = _do_test_raw("""
         x.createStatement("foo " + y);
     """)
-    eq_(err.warnings[0]['id'][-1], 'executeSimpleSQL_dynamic')
+    assert err.warnings[0]['id'][-1] == 'executeSimpleSQL_dynamic'
 
     err = _do_test_raw("""
         x.createAsyncStatement("foo " + y);
     """)
-    eq_(err.warnings[0]['id'][-1], 'executeSimpleSQL_dynamic')
+    assert err.warnings[0]['id'][-1] == 'executeSimpleSQL_dynamic'
+
 
 def test_setAttribute():
     """Tests that setAttribute calls are blocked successfully"""
@@ -176,23 +177,15 @@ class TestInstanceActions(TestCase):
         """)
         self.assert_notices()
 
-    def test_openDialog(self):
+    @pytest.mark.parametrize('uri', ('http://foo/bar/',
+                                     'https://foo/bar/',
+                                     'ftp://foo/bar/',
+                                     'data:asdf'))
+    def test_openDialog(self, uri):
         """
         Test that `*.openDialog("<remote url>")` throws an error where
         <remote url> is a non-chrome, non-relative URL.
         """
 
-        def test_uri(self, uri):
-            self.setUp()
-            self.setup_err()
-            self.run_script('foo.openDialog("%s")' % uri)
-            self.assert_failed(with_warnings=True)
-
-
-        uris = ['http://foo/bar/',
-                'https://foo/bar/',
-                'ftp://foo/bar/',
-                'data:asdf']
-        for uri in uris:
-            yield test_uri, self, uri
-
+        self.run_script('foo.openDialog("%s")' % uri)
+        self.assert_failed(with_warnings=True)

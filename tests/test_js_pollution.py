@@ -38,7 +38,6 @@ def test_inferred_variables():
         });
     """, ignore_pollution=False)
 
-    print err.final_context.keys()
     assert ({'foo', 'bar', 'baz', 'quux', 'thing', 'hello'} <=
             set(err.final_context.keys()))
     assert not err.failed()

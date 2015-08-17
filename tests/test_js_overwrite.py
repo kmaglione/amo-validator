@@ -1,3 +1,5 @@
+import pytest
+
 from js_helper import TestCase
 
 
@@ -36,38 +38,35 @@ class TestOverwrite(TestCase):
         self.assert_var_eq('y', 'bar')
         self.assert_var_eq('z', 'bar')
 
-    def test_global_overwrite(self):
+    @pytest.mark.parametrize('script,warnings', (
+        ('Number = "asdf"', -1),
+        ('Number.prototype = "foo"', 1),
+        ('Number.prototype.test = "foo"', 2),
+        ('Number.prototype["test"] = "foo"', 2),
+        ('x = Number.prototype; x.test = "foo"', 1),
+    ))
+    def test_global_overwrite(self, script, warnings):
         """Tests that important objects cannot be overridden by JS."""
 
-        def test(self, script, warnings=-1):
-            self.setUp()
-            self.run_script(script)
-            if warnings > 0:
-                self.assert_failed(with_warnings=True)
-                assert len(self.err.warnings) == warnings
-            elif warnings == -1:
-                self.assert_failed()
+        self.run_script(script, expose_pollution=True)
+        if warnings > 0:
+            self.assert_failed(with_warnings=True)
+            assert len(self.err.warnings) == warnings
+        elif warnings == -1:
+            self.assert_failed()
 
-        yield test, self, 'Number = "asdf"'
-        yield test, self, 'Number.prototype = "foo"', 1
-        yield test, self, 'Number.prototype.test = "foo"', 2
-        yield test, self, 'Number.prototype["test"] = "foo"', 2
-        yield test, self, 'x = Number.prototype; x.test = "foo"'
-
-    def test_global_overwrite_bootstrapped(self):
+    @pytest.mark.parametrize('script', (
+        'Number.prototype = "foo"',
+        'Number.prototype.test = "foo"',
+        'Number.prototype["test"] = "foo"',
+        'x = Number.prototype; x.test = "foo"',
+    ))
+    def test_global_overwrite_bootstrapped(self, script):
         """Test that restartless add-ons don't get overwrite warnings."""
 
-        def test(self, script):
-            self.setUp()
-            self.run_script(script, bootstrap=True)
-            assert not any('global_overwrite' in m['id'] for
-                           m in self.err.warnings)
-
-        yield test, self, 'Number = "asdf"'
-        yield test, self, 'Number.prototype = "foo"'
-        yield test, self, 'Number.prototype.test = "foo"'
-        yield test, self, 'Number.prototype["test"] = "foo"'
-        yield test, self, 'x = Number.prototype; x.test = "foo"'
+        self.run_script(script, bootstrap=True)
+        assert not any('global_overwrite' in m['id'] for
+                       m in self.err.warnings)
 
     def test_reduced_overwrite_messages(self):
         """
@@ -93,11 +92,11 @@ class TestOverwrite(TestCase):
         """
 
         self.run_script("""
-        if(true) {
+        if (true) {
             let eval = "asdf";
             eval = 123;
 
-            var Object = "foo";
+            let Object = "foo";
             Object = "bar";
         }
         """)
@@ -130,7 +129,8 @@ class TestOverwrite(TestCase):
         self.assert_failed()
 
     def test_local_global_overwrite(self):
-        """Test that a global assigned to a local variable can be overwritten."""
+        """Test that a global assigned to a local variable can be
+        overwritten."""
 
         self.run_script("""
         foo = String.prototype;
@@ -158,14 +158,19 @@ class TestOverwrite(TestCase):
         self.run_script("""gBrowser.selectedTab = 123;""")
         self.assert_silent()
 
-    def test_constructors(self):
+    @pytest.mark.parametrize('constructor', (
+        'Array',
+        'Boolean',
+        'Date',
+        'File',
+        'Function',
+        'Number',
+        'Object',
+        'RegExp',
+        'String',
+    ))
+    def test_constructors(self, constructor):
         """Test that the constructors cannot be overwritten."""
-        def test(self, contsructor):
-            self.setUp()
-            self.run_script("""%s = "foo";""" % constructor)
-            self.assert_failed(with_warnings=True)
 
-        for constructor in ['Function', 'Object', 'String', 'Number', 'RegExp',
-                            'File', 'Boolean', 'Array', 'Date']:
-            yield test, self, constructor
-
+        self.run_script("""%s = "foo";""" % constructor)
+        self.assert_failed(with_warnings=True)

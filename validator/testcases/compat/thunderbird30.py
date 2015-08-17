@@ -1,8 +1,7 @@
 from validator.testcases.regex.compat import (COMPAT_REGEXPS,
                                               CheapCompatBugPatternTests)
 
-from ..javascript.entity_values import register_changed_entities
-from . import build_definition
+from . import build_definition, register_changed_entities
 
 
 TB30_DEFINITION = build_definition(30, thunderbird=True)
