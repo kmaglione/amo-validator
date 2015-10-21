@@ -180,9 +180,9 @@ def test_proper_linked_manifest():
     assert not err.failed() or err.notices
 
     # From the base file:
-    assert list(chrome.get_triples(subject='foo'))
+    assert list(chrome.get_entries('foo'))
     # From the linked manifest:
-    zaps = list(chrome.get_triples(subject='zap'))
+    zaps = list(chrome.get_entries('zap'))
     assert zaps
     eq_(zaps[0]['filename'], 'submanifest.manifest')
     eq_(zaps[0]['context'].data, ['zap baz', ''])
@@ -208,7 +208,7 @@ def test_proper_linked_manifest_relative():
     assert not err.failed() or err.notices
 
     # From the linked manifest:
-    zaps = list(chrome.get_triples(subject='zap'))
+    zaps = list(chrome.get_entries('zap'))
     assert zaps
     eq_(zaps[0]['filename'], 'dir/foo.manifest')
     eq_(zaps[0]['context'].data, ['zap baz', ''])
@@ -229,9 +229,9 @@ def test_missing_manifest_link():
     assert err.notices
 
     # From the base file:
-    assert list(chrome.get_triples(subject='foo'))
+    assert list(chrome.get_entries('foo'))
     # From the linked manifest:
-    assert not list(chrome.get_triples(subject='zap'))
+    assert not list(chrome.get_entries('zap'))
 
 
 def test_linked_manifest_recursion():
@@ -249,13 +249,13 @@ def test_linked_manifest_recursion():
 
     print err.print_summary(verbose=True)
 
-    assert err.failed()
+    assert not err.failed()
     assert not err.notices
 
     # From the base file:
-    assert list(chrome.get_triples(subject='foo'))
+    assert list(chrome.get_entries('foo'))
     # From the linked manifest:
-    assert not list(chrome.get_triples(subject='zap'))
+    assert not list(chrome.get_entries('zap'))
 
 
 # Test determined modes

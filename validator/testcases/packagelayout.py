@@ -170,8 +170,8 @@ def test_compatibility_binary(err, xpi_package):
     if not chrome:
         return
 
-    for triple in chrome.triples:
-        if triple['subject'] == 'binary-component':
+    for entry in chrome.entries:
+        if entry['type'] == 'binary-component':
             err.metadata['binary_components'] = True
             err.notice(
                 err_id=('testcases_packagelayout',
@@ -181,9 +181,9 @@ def test_compatibility_binary(err, xpi_package):
                 description=('A file (%s) was registered as a binary '
                              'component. Binary files may not be submitted to '
                              'AMO unless accompanied by source code.'
-                                % triple['predicate'],
+                                % entry['args'][0],
                              description),
-                filename=triple['predicate'],
+                filename=entry['args'][0],
                 compatibility_type='error')
 
 

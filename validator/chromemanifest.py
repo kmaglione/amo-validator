@@ -1,4 +1,5 @@
 import os.path
+import re
 
 from validator.contextgenerator import ContextGenerator
 
@@ -7,85 +8,109 @@ class ChromeManifest(object):
     """This class enables convenient parsing and iteration of
     chrome.manifest files."""
 
-    def __init__(self, data, path):
-        self.context = ContextGenerator(data)
-        self.lines = data.split('\n')
+    def __init__(self, xpi, path, err=None):
+        self.xpi = xpi
+        self.err = err
 
-        # Extract the data from the triples in the manifest
-        triples = []
-        counter = 0
+        self.manifests = set()
 
-        for line in self.lines:
-            line = line.strip()
+        self.entries = list(self.read_manifest(path))
 
-            counter += 1
+    def read_manifest(self, path, from_entry=None):
+        """Read the manifest at the given path, yielding every entry in that
+        file, and any sub-manifests."""
 
-            # Skip weird lines.
-            if line.startswith('#'):
+        if path in self.manifests:
+            return
+
+        path = self.normalize(path)
+
+        self.manifests.add(path)
+
+        try:
+            data = self.xpi.read(path)
+        except Exception:
+            if from_entry:
+                self.err.notice(
+                    err_id=('submain', 'populate_chrome_manifest', 'linkerr'),
+                    notice='Linked manifest could not be found.',
+                    description=('A linked manifest file could not be found '
+                                 'in the package.',
+                                 'Path: %s' % path),
+                    filename=from_entry['filename'],
+                    line=from_entry['line'],
+                    context=from_entry['context'])
+            return
+
+        context = ContextGenerator(data)
+
+        lines = data.split('\n')
+
+        for line_no, line in enumerate(lines):
+            line = re.sub('#.*', '', line).strip()
+
+            line = line.split()
+            if len(line) < 2:
+                continue
+            if len(line) < 3:
+                line.append('')
+
+            type_ = line.pop(0)
+
+            entry = {'type': type_,
+                     'args': tuple(line),
+                     'line': line_no + 1,
+                     'filename': path,
+                     'context': context}
+
+            if type_ == 'manifest':
+                path_ = self.resolve(entry, line[0])
+                for entry in self.read_manifest(path_, entry):
+                    yield entry
+            else:
+                yield entry
+
+    def normalize(self, path):
+        """Normalize a path."""
+
+        path = re.sub(r'//+', '/', path)
+        path = path.lstrip('/')
+
+        return path
+
+    def resolve(self, entry, path):
+        """Resolve the given path relative to its manifest file."""
+
+        base_path = os.path.dirname(entry['filename'])
+
+        return os.path.join(base_path, path)
+
+    def get_entries(self, type_=None, *args):
+        """Returns entries matching the specified type and args."""
+
+        assert type_ is not None or not args
+
+        for entry in self.entries:
+            if type_ is not None and entry['type'] != type_:
                 continue
 
-            triple = line.split(None, 2)
-            if not triple:
-                continue
-            elif len(triple) == 2:
-                triple.append('')
-            if len(triple) < 3:
+            if entry['args'][:len(args)] != args:
                 continue
 
-            triples.append({'subject': triple[0],
-                            'predicate': triple[1],
-                            'object': triple[2],
-                            'line': counter,
-                            'filename': path,
-                            'context': self.context})
+            yield entry
 
-        self.triples = triples
+    def is_component(self, path):
+        """Return true if the file at the given path is a component."""
 
-    def get_value(self, subject=None, predicate=None, object_=None):
-        """Returns the first triple value matching the given subject,
-        predicate, and/or object"""
+        path = self.normalize(path)
 
-        for triple in self.triples:
+        for entry in self.get_entries('component'):
+            path_ = self.resolve(entry, entry['args'][1])
 
-            # Filter out non-matches
-            if (subject and triple['subject'] != subject) or \
-               (predicate and triple['predicate'] != predicate) or \
-               (object_ and triple['object'] != object_):  # pragma: no cover
-                continue
+            if path == path_:
+                return True
 
-            # Return the first found.
-            return triple
-
-        return None
-
-    def get_objects(self, subject=None, predicate=None):
-        """Returns a generator of objects that correspond to the
-        specified subjects and predicates."""
-
-        for triple in self.triples:
-
-            # Filter out non-matches
-            if ((subject and triple['subject'] != subject) or
-                (predicate and triple['predicate'] != predicate)):
-                continue
-
-            yield triple['object']
-
-    def get_triples(self, subject=None, predicate=None, object_=None):
-        """Returns triples that correspond to the specified subject,
-        predicates, and objects."""
-
-        for triple in self.triples:
-
-            # Filter out non-matches
-            if subject is not None and triple['subject'] != subject:
-                continue
-            if predicate is not None and triple['predicate'] != predicate:
-                continue
-            if object_ is not None and triple['object'] != object_:
-                continue
-
-            yield triple
+        return False
 
     def get_applicable_overlays(self, error_bundle):
         """
@@ -93,7 +118,7 @@ class ChromeManifest(object):
         current package or subpackage are returned.
         """
 
-        content_paths = self.get_triples(subject='content')
+        content_paths = self.get_entries('content')
         if not content_paths:
             return set()
 
@@ -104,10 +129,8 @@ class ChromeManifest(object):
 
         # Look through each of the listed packages and paths.
         for path in content_paths:
-            chrome_name = path['predicate']
-            if not path['object']:
-                continue
-            path_location = path['object'].strip().split()[0]
+            chrome_name = path['args'][0]
+            path_location = path['args'][1]
 
             # Handle jarred paths differently.
             if path_location.startswith('jar:'):
@@ -147,8 +170,8 @@ class ChromeManifest(object):
         applicable_overlays = set()
         chrome_path = 'chrome://%s' % self._url_chunk_join(chrome_path + '/')
 
-        for overlay in self.get_triples(subject='overlay'):
-            if not overlay['object']:
+        for overlay in self.get_entries('overlay'):
+            if not overlay['args'][1]:
                 error_bundle.error(
                     err_id=('chromemanifest', 'get_applicable_overalys',
                             'object'),
@@ -158,14 +181,13 @@ class ChromeManifest(object):
                                 'a chrome URL at minimum.',
                     filename=overlay['filename'],
                     line=overlay['line'],
-                    context=self.context)  #TODO(basta): Update this!
+                    context=overlay['context'])
                 continue
-            overlay_url = overlay['object'].split()[0]
+            overlay_url = overlay['args'][1]
             if overlay_url.startswith(chrome_path):
                 overlay_relative_path = overlay_url[len(chrome_path):]
-                applicable_overlays.add('/%s' %
-                        self._url_chunk_join(content_root_path,
-                                             overlay_relative_path))
+                applicable_overlays.add('/%s' % self._url_chunk_join(
+                    content_root_path, overlay_relative_path))
 
         return applicable_overlays
 
@@ -185,12 +207,10 @@ class ChromeManifest(object):
         if not isinstance(state, list):
             state = state.package_stack
 
-        content_paths = self.get_triples(subject='content')
+        content_paths = self.get_entries('content')
         for content_path in content_paths:
-            chrome_name = content_path['predicate']
-            if not content_path['object']:
-                continue
-            path_location = content_path['object'].split()[0]
+            chrome_name = content_path['args'][0]
+            path_location = content_path['args'][1]
 
             if path_location.startswith('jar:'):
                 if not state:
@@ -237,4 +257,3 @@ class ChromeManifest(object):
         if args[-1].endswith('/'):
             url = '%s/' % url
         return url
-

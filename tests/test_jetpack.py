@@ -4,6 +4,7 @@ import hashlib
 import json
 import nose
 
+from .helper import OtherMockXPI as MockXPI
 from js_helper import _do_real_test_raw as _js_test
 import validator.testcases.jetpack as jetpack
 from validator.errorbundler import ErrorBundle
@@ -15,24 +16,6 @@ def _do_test(xpi_package, allow_old_sdk=True):
     err = ErrorBundle()
     jetpack.inspect_jetpack(err, xpi_package, allow_old_sdk=allow_old_sdk)
     return err
-
-
-class MockXPI(object):
-
-    def __init__(self, resources):
-        self.resources = resources
-
-    def read(self, name):
-        if isinstance(self.resources[name], bool):
-            return ''
-        return self.resources[name]
-
-    def __iter__(self):
-        for name in self.resources.keys():
-            yield name
-
-    def __contains__(self, name):
-        return name in self.resources
 
 
 def test_not_jetpack():

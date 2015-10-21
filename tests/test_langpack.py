@@ -1,7 +1,6 @@
 import validator.testcases.langpack as langpack
-from validator.chromemanifest import ChromeManifest
 from validator.errorbundler import ErrorBundle
-from helper import _do_test, MockXPI
+from helper import _do_test, MockXPI, chrome_manifest
 
 
 def test_langpack_valid():
@@ -96,11 +95,10 @@ def test_valid_chrome_manifest():
     'Chrome manifests must only contain certain elements'
 
     err = ErrorBundle()
-    err.save_resource('chrome.manifest', ChromeManifest('locale foo bar', ''))
+    err.save_resource('chrome.manifest', chrome_manifest('locale foo bar'))
     langpack.test_langpack_manifest(err, MockXPI())
     assert not err.failed()
 
-    err.save_resource('chrome.manifest', ChromeManifest('foo bar asdf', ''))
+    err.save_resource('chrome.manifest', chrome_manifest('foo bar asdf'))
     langpack.test_langpack_manifest(err, MockXPI())
     assert err.failed()
-

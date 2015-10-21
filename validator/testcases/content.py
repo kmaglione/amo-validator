@@ -38,18 +38,18 @@ def test_xpcnativewrappers(err, xpi_package=None):
     if not chrome:
         return None
 
-    for triple in chrome.triples:
-        # Test to make sure that the triple's subject is valid
-        if triple['subject'] == 'xpcnativewrappers':
+    for entry in chrome.entries:
+        # Test to make sure that the entry's subject is valid
+        if entry['type'] == 'xpcnativewrappers':
             err.warning(('testcases_content',
                          'test_xpcnativewrappers',
                          'found_in_chrome_manifest'),
                         'xpcnativewrappers not allowed in chrome.manifest',
                         'chrome.manifest files are not allowed to contain '
                         'xpcnativewrappers directives.',
-                        filename=triple['filename'],
-                        line=triple['line'],
-                        context=triple['context'])
+                        filename=entry['filename'],
+                        line=entry['line'],
+                        context=entry['context'])
 
 
 @decorator.register_test(tier=2)

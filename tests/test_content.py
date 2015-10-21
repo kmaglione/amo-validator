@@ -1,14 +1,13 @@
 from mock import patch
 from nose.tools import eq_
 
-from helper import MockXPI
+from helper import MockXPI, chrome_manifest
 from js_helper import _do_test_raw
 
 import validator.xpi as xpi
 from validator import submain
 from validator.testcases import content
 from validator.errorbundler import ErrorBundle
-from validator.chromemanifest import ChromeManifest
 from validator.constants import *
 
 
@@ -94,14 +93,12 @@ def test_xpcnativewrappers():
     err = ErrorBundle()
     assert content.test_xpcnativewrappers(err, None) is None
 
-    err.save_resource('chrome.manifest',
-                      ChromeManifest('foo bar', 'chrome.manifest'))
+    err.save_resource('chrome.manifest', chrome_manifest('foo bar'))
     content.test_xpcnativewrappers(err, None)
     assert not err.failed()
 
     err.save_resource('chrome.manifest',
-                      ChromeManifest('xpcnativewrappers on',
-                                     'chrome.manifest'))
+                      chrome_manifest('xpcnativewrappers on'))
     content.test_xpcnativewrappers(err, None)
     assert err.failed()
 

@@ -1,8 +1,7 @@
 from nose.tools import eq_
 
-from helper import MockXPI
+from helper import MockXPI, chrome_manifest
 
-from validator.chromemanifest import ChromeManifest
 import validator.testcases.content as content
 from validator.errorbundler import ErrorBundle
 
@@ -14,10 +13,10 @@ def test_marking_overlays():
 
     err = ErrorBundle()
     err.supported_versions = {}
-    c = ChromeManifest("""
+    c = chrome_manifest("""
     content ns1 foo/
     overlay chrome://foo chrome://ns1/content/main.xul
-    """, 'chrome.manifest')
+    """)
     err.save_resource('chrome.manifest', c)
     err.save_resource('chrome.manifest_nopush', c)
 
@@ -40,10 +39,10 @@ def test_marking_overlays_root_package():
 
     err = ErrorBundle()
     err.supported_versions = {}
-    manifest = ChromeManifest("""
+    manifest = chrome_manifest("""
     content ns1 /
     overlay chrome://foo chrome://ns1/content/main.xul
-    """, 'chrome.manifest')
+    """)
     err.save_resource('chrome.manifest', manifest)
     err.save_resource('chrome.manifest_nopush', manifest)
 
@@ -67,10 +66,10 @@ def test_marking_overlays_no_overlay():
 
     err = ErrorBundle()
     err.supported_versions = {}
-    c = ChromeManifest("""
+    c = chrome_manifest("""
     content ns1 foo/
     #overlay chrome://foo chrome://ns1/main.xul
-    """, 'chrome.manifest')
+    """)
     err.save_resource('chrome.manifest', c)
     err.save_resource('chrome.manifest_nopush', c)
 
@@ -92,10 +91,10 @@ def test_marking_overlays_subdir():
 
     err = ErrorBundle()
     err.supported_versions = {}
-    c = ChromeManifest("""
+    c = chrome_manifest("""
     content ns1 foo/
     overlay chrome://foo chrome://ns1/content/subdir/main.xul
-    """, 'chrome.manifest')
+    """)
     err.save_resource('chrome.manifest', c)
     err.save_resource('chrome.manifest_nopush', c)
 

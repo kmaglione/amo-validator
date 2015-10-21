@@ -46,12 +46,12 @@ def test_categories(err):
     if not chrome:
         return
 
-    for triple in chrome.triples:
-        if (triple['subject'] == 'category' and
-                triple['predicate'] in DANGEROUS_CATEGORIES):
-            err.warning(filename=triple['filename'],
-                        line=triple['line'],
-                        context=triple['context'],
+    for entry in chrome.entries:
+        if (entry['type'] == 'category' and
+                entry['args'][0] in DANGEROUS_CATEGORIES):
+            err.warning(filename=entry['filename'],
+                        line=entry['line'],
+                        context=entry['context'],
                         **DANGEROUS_CATEGORY_WARNING)
 
 
@@ -63,9 +63,9 @@ def test_resourcemodules(err):
     if not chrome:
         return
 
-    for triple in chrome.triples:
-        if (triple['subject'] == 'resource' and
-                triple['predicate'].startswith('modules')):
+    for entry in chrome.entries:
+        if (entry['type'] == 'resource' and
+                entry['args'][0].startswith('modules')):
             err.error(
                 err_id=('testcases_chromemanifest', 'test_resourcemodules',
                         'resource_modules'),
@@ -74,9 +74,9 @@ def test_resourcemodules(err):
                 description='There should not be resources in the '
                             'chrome.manifest file that are listed as '
                             "'resource modules'.",
-                filename=triple['filename'],
-                line=triple['line'],
-                context=triple['context'])
+                filename=entry['filename'],
+                line=entry['line'],
+                context=entry['context'])
 
 
 @decorator.register_test(tier=3, simple=True)
@@ -88,34 +88,34 @@ def test_content_instructions(err):
         return
 
     banned_namespaces = {
-            'godlikea': "The 'godlikea' namespace is generated from a "
-                        'template and should be replaced with something '
-                        'unique to your add-on to avoid name conflicts.'}
+        'godlikea': "The 'godlikea' namespace is generated from a "
+                    'template and should be replaced with something '
+                    'unique to your add-on to avoid name conflicts.'}
 
-    for triple in chrome.get_triples(subject='content'):
-        if not triple['predicate'] or not triple['object']:
+    for entry in chrome.get_entries('content'):
+        if not entry['args'][0] or not entry['args'][1]:
             err.warning(
                 err_id=('testcases_chromemanifest',
                         'test_content_instructions', 'missing_triplicates'),
                 warning='`content` instruction missing information',
                 description='All content instructions must have a package '
                             'name and a URI to the files it describes.',
-                filename=triple['filename'],
-                line=triple['line'],
-                context=triple['context'])
+                filename=entry['filename'],
+                line=entry['line'],
+                context=entry['context'])
             continue
 
-        if triple['predicate'] in banned_namespaces:
+        if entry['args'][0] in banned_namespaces:
             err.error(
                 err_id=('testcases_chromemanifest',
                         'test_content_instructions', 'godlikea'),
                 error='Banned namespace in chrome.manifest',
-                description=banned_namespaces[triple['predicate']],
-                filename=triple['filename'],
-                line=triple['line'],
-                context=triple['context'])
-        elif (triple['object'] != '' and
-              not triple['object'].split()[0].endswith('/')):
+                description=banned_namespaces[entry['args'][0]],
+                filename=entry['filename'],
+                line=entry['line'],
+                context=entry['context'])
+        elif (entry['args'][1] != '' and
+              not entry['args'][1].endswith('/')):
             err.notice(
                 err_id=('testcases_chromemanifest',
                         'test_content_instructions', 'trailing'),
@@ -123,6 +123,6 @@ def test_content_instructions(err):
                 description='Chrome manifest content instructions must have a '
                             'trailing slash on their URI. For more '
                             'information, see %s.' % MANIFEST_URI,
-                filename=triple['filename'],
-                line=triple['line'],
-                context=triple['context'])
+                filename=entry['filename'],
+                line=entry['line'],
+                context=entry['context'])

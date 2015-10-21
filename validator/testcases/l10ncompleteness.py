@@ -33,16 +33,15 @@ def _list_locales(err, xpi_package=None):
     chrome = None
     if xpi_package is not None:
         # Handle a reference XPI
-        chrome = ChromeManifest(xpi_package.read('chrome.manifest'),
-                                'chrome.manifest')
+        chrome = ChromeManifest(xpi_package, 'chrome.manifest', err)
     else:
         # Handle the current XPI
         chrome = err.get_resource('chrome.manifest')
     if not chrome:
         return None
 
-    pack_locales = chrome.get_triples('locale')
-    return list(pack_locales)
+    return list(chrome.get_entries('locale'))
+
 
 def _get_locales(err, xpi_package=None, locales=None):
     'Returns a list of locales from the chrome.manifest file.'
@@ -54,9 +53,8 @@ def _get_locales(err, xpi_package=None, locales=None):
 
     processed_locales = {}
     for locale in locales:
-        locale_jar = locale['object'].split()
-
-        location = locale_jar[-1]
+        locale_code = locale['args'][1]
+        location = locale['args'][2]
 
         # Locales can be bundled in JARs
         jarred = location.startswith('jar:')
@@ -70,14 +68,14 @@ def _get_locales(err, xpi_package=None, locales=None):
 
             path, location = split_location
 
-        locale_desc = {'predicate': locale['predicate'],
+        locale_desc = {'package': locale['args'][0],
                        'target': location,
-                       'name': locale_jar[0],
+                       'name': locale_code,
                        'jarred': jarred}
         if jarred:
             locale_desc['path'] = path
 
-        locale_name = '%s:%s' % (locale['predicate'], locale_jar[0])
+        locale_name = '%s:%s' % (locale['args'][0], locale_code)
         if locale_name not in processed_locales:
             processed_locales[locale_name] = locale_desc
 
@@ -169,7 +167,7 @@ def test_xpi(err, xpi_package):
 
     def get_reference(locale):
         for r_name, r in references.items():
-            if r['predicate'] == locale['predicate']:
+            if r['package'] == locale['package']:
                 return r_name, r
         return None, None
 
@@ -243,10 +241,10 @@ def test_lp_xpi(err, xpi_package):
                                        no_cache=True)
         for ref_locale_name in ref_locales:
             ref_locale = ref_locales[ref_locale_name]
-            ref_predicate = ref_locale['predicate']
+            ref_package = ref_locale['package']
             corresp_locales = [locales[name] for name
                                in locales
-                               if locales[name]['predicate'] == ref_predicate]
+                               if locales[name]['package'] == ref_package]
             # If we found no matching locale, then it's missing from the pack
             if not corresp_locales:
                 err.warning(('testcases_l10ncompleteness',
@@ -255,7 +253,7 @@ def test_lp_xpi(err, xpi_package):
                             'Could not find corresponding locale',
                             ['A locale was found in the reference package, '
                              'however it was not found in the target package.',
-                             'Missing locale: %s' % ref_predicate],
+                             'Missing locale: %s' % ref_package],
                             filename='chrome.manifest')
                 continue
 

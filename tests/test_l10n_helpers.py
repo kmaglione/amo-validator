@@ -29,24 +29,22 @@ def test_get_locales():
 
     assert not (_get_locales(None,
                              None,
-                             [{'object': 'foo bar jar:nobang'}]))
+                             [{'args': ['x', 'foo', 'jar:nobang']}]))
 
     assert (_get_locales(None,
                          None,
-                         [{'subject': 'locale',
-                           'predicate': 'pred1',
-                           'object': 'loc1 /foo/bar'}]) ==
-            {'pred1:loc1': {'predicate': 'pred1',
+                         [{'type': 'locale',
+                           'args': ['pred1', 'loc1', '/foo/bar']}]) ==
+            {'pred1:loc1': {'package': 'pred1',
                             'target': '/foo/bar',
                             'name': 'loc1',
                             'jarred': False}})
 
     assert (_get_locales(None,
                          None,
-                         [{'subject': 'locale',
-                           'predicate': 'pred2',
-                           'object': 'loc2 jar:foo.jar!/bar/zap'}]) ==
-            {'pred2:loc2': {'predicate': 'pred2',
+                         [{'type': 'locale',
+                           'args': ['pred2', 'loc2', 'jar:foo.jar!/bar/zap']}]) ==
+            {'pred2:loc2': {'package': 'pred2',
                             'target': '/bar/zap',
                             'path': 'foo.jar',
                             'name': 'loc2',
@@ -132,6 +130,5 @@ class MockManifest(object):
     def __init__(self, locales):
         self.locales = locales
 
-    def get_triples(self, subject):
+    def get_entries(self, subject):
         return self.locales
-

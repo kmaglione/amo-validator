@@ -235,71 +235,7 @@ def populate_chrome_manifest(err, xpi_package):
     "Loads the chrome.manifest if it's present"
 
     if 'chrome.manifest' in xpi_package:
-        chrome_data = xpi_package.read('chrome.manifest')
-        chrome = ChromeManifest(chrome_data, 'chrome.manifest')
-
-        chrome_recursion_buster = set()
-
-        # Handle the case of manifests linked from the manifest.
-        def get_linked_manifest(path, from_path, from_chrome, from_triple):
-
-            if path in chrome_recursion_buster:
-                err.warning(
-                    err_id=('submain', 'populate_chrome_manifest',
-                            'recursion'),
-                    warning='Linked manifest recursion detected.',
-                    description='A chrome registration file links back to '
-                                'itself. This can cause a multitude of '
-                                'issues.',
-                    filename=path)
-                return
-
-            # Make sure the manifest is properly linked
-            if path not in xpi_package:
-                err.notice(
-                    err_id=('submain', 'populate_chrome_manifest', 'linkerr'),
-                    notice='Linked manifest could not be found.',
-                    description=('A linked manifest file could not be found '
-                                 'in the package.',
-                                 'Path: %s' % path),
-                    filename=from_path,
-                    line=from_triple['line'],
-                    context=from_chrome.context)
-                return
-
-            chrome_recursion_buster.add(path)
-
-            manifest = ChromeManifest(xpi_package.read(path), path)
-            for triple in manifest.triples:
-                yield triple
-
-                if triple['subject'] == 'manifest':
-                    subpath = triple['predicate']
-                    # If the path is relative, make it relative to the current
-                    # file.
-                    if not subpath.startswith('/'):
-                        subpath = '%s/%s' % (
-                            '/'.join(path.split('/')[:-1]), subpath)
-
-                    subpath = subpath.lstrip('/')
-
-                    for subtriple in get_linked_manifest(
-                            subpath, path, manifest, triple):
-                        yield subtriple
-
-            chrome_recursion_buster.discard(path)
-
-        chrome_recursion_buster.add('chrome.manifest')
-
-        # Search for linked manifests in the base manifest.
-        for extra_manifest in chrome.get_triples(subject='manifest'):
-            # When one is found, add its triples to our own.
-            for triple in get_linked_manifest(extra_manifest['predicate'],
-                                              'chrome.manifest', chrome,
-                                              extra_manifest):
-                chrome.triples.append(triple)
-
-        chrome_recursion_buster.discard('chrome.manifest')
+        chrome = ChromeManifest(xpi_package, 'chrome.manifest', err)
 
         # Create a reference so we can get the chrome manifest later, but make
         # it pushable so we don't run chrome manifests in JAR files.

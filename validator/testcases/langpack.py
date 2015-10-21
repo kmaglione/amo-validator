@@ -11,46 +11,46 @@ BAD_LINK = '(href|src)=["\'](?!chrome:\/\/)(([a-z]*:)?\/\/|data:)'
 @decorator.register_test(tier=2, expected_type=PACKAGE_LANGPACK)
 def test_langpack_manifest(err, xpi_package=None):
     """Tests the chrome.manifest files in the package for
-    compliance with the standard language pack triples."""
+    compliance with the standard language pack entries."""
 
     # Don't even both with the test(s) if there's no chrome.manifest.
     chrome = err.get_resource('chrome.manifest')
     if not chrome:
         return
 
-    for triple in chrome.triples:
-        subject = triple['subject']
-        # Test to make sure that the triple's subject is valid
-        if subject not in ('locale', 'override', 'manifest'):
+    for entry in chrome.entries:
+        type_ = entry['type']
+        # Test to make sure that the entry's type is valid
+        if type_ not in ('locale', 'override', 'manifest'):
             err.warning(('testcases_langpack',
                          'test_langpack_manifest',
                          'invalid_subject'),
-                        'Invalid chrome.manifest subject',
+                        'Invalid chrome.manifest entry type',
                         ['chrome.manifest files in language packs are only '
                          'allowed to contain items that are prefixed with '
                          "'locale', 'manifest', or 'override'. Other values "
                          'are not allowed.',
-                         'Invalid subject: %s' % subject],
-                        filename=triple['filename'],
-                        line=triple['line'],
-                        context=triple['context'])
+                         'Invalid type: %s' % type_],
+                        filename=entry['filename'],
+                        line=entry['line'],
+                        context=entry['context'])
 
-        if subject == 'override':
-            object_ = triple['object']
-            predicate = triple['predicate']
+        if type_ == 'override':
+            source = entry['args'][0]
+            dest = entry['args'][1]
 
             pattern = 'chrome://*/locale/*'
 
-            if not fnmatch.fnmatch(object_, pattern) or \
-               not fnmatch.fnmatch(predicate, pattern):
+            if not fnmatch.fnmatch(dest, pattern) or \
+               not fnmatch.fnmatch(source, pattern):
                 err.warning(('testcases_langpack',
                              'test_langpack_manifest',
                              'invalid_override'),
-                            'Invalid chrome.manifest object/predicate.',
+                            'Invalid chrome.manifest override value',
                             "'override' entry does not match '%s'" % pattern,
-                            filename=triple['filename'],
-                            line=triple['line'],
-                            context=triple['context'])
+                            filename=entry['filename'],
+                            line=entry['line'],
+                            context=entry['context'])
 
 
 # This function is called by content.py
@@ -89,5 +89,3 @@ def test_unsafe_html(err, filename, data):
                     filename,
                     line=line,
                     context=context)
-
-

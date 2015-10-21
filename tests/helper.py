@@ -399,3 +399,32 @@ class MockXPI:
 
     def read(self, name):
         return open(self.data[name]).read()
+
+
+# Ugh.
+class OtherMockXPI(object):
+
+    def __init__(self, resources):
+        self.resources = resources
+
+    def read(self, name):
+        if isinstance(self.resources[name], bool):
+            return ''
+        return self.resources[name]
+
+    def __iter__(self):
+        for name in self.resources.keys():
+            yield name
+
+    def __contains__(self, name):
+        return name in self.resources
+
+
+def chrome_manifest(string):
+    """Returns a mock ChromeManifest object for the given string."""
+    from validator.chromemanifest import ChromeManifest
+
+    xpi = OtherMockXPI({
+        'chrome.manifest': string
+    })
+    return ChromeManifest(xpi, 'chrome.manifest')

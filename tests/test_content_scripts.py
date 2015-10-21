@@ -1,8 +1,7 @@
 from nose.tools import eq_
 
-from helper import MockXPI
+from .helper import MockXPI, chrome_manifest
 
-from validator.chromemanifest import ChromeManifest
 import validator.testcases.content as content
 from validator.errorbundler import ErrorBundle
 
@@ -89,9 +88,7 @@ def test_packed_scripts_pollution():
     err = ErrorBundle()
     err.supported_versions = {}
 
-    c = ChromeManifest("""
-    content ns jar:subpackage.jar!/
-    """, 'chrome.manifest')
+    c = chrome_manifest('content ns jar:subpackage.jar!/')
 
     err.save_resource('chrome.manifest_nopush', c, pushable=False)
 
@@ -124,9 +121,7 @@ def test_packed_scripts_no_pollution():
     err = ErrorBundle()
     err.supported_versions = {}
 
-    c = ChromeManifest("""
-    content ns jar:subpackage.jar!/
-    """, 'chrome.manifest')
+    c = chrome_manifest('content ns jar:subpackage.jar!/')
 
     err.save_resource('chrome.manifest_nopush', c, pushable=False)
 
@@ -142,5 +137,3 @@ def test_packed_scripts_no_pollution():
     eq_(err.package_stack, [])
 
     assert not err.failed()
-
-

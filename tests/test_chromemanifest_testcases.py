@@ -1,14 +1,13 @@
-from nose.tools import eq_
+from .helper import chrome_manifest
 
 import validator.testcases.chromemanifest as tc_chromemanifest
 from validator.errorbundler import ErrorBundle
-from validator.chromemanifest import ChromeManifest
 
 
 def test_pass():
     """Test that standard category subjects pass."""
 
-    c = ChromeManifest('category foo bar', 'chrome.manifest')
+    c = chrome_manifest('category foo bar')
     err = ErrorBundle()
     err.save_resource('chrome.manifest', c)
 
@@ -31,8 +30,7 @@ def test_no_chromemanifest():
 
 def test_js_categories_gecko2():
     """Test that JS categories raise problems for hyphenated values."""
-    c = ChromeManifest('category JavaScript-DOM-class foo bar',
-                       'chrome.manifest')
+    c = chrome_manifest('category JavaScript-DOM-class foo bar')
     err = ErrorBundle()
     err.save_resource('chrome.manifest', c)
 
@@ -46,12 +44,12 @@ def test_js_categories_gecko2():
                'editors_only': True}
     msg = err.warnings[0]
     for key, value in warning.iteritems():
-        eq_(msg[key], value)
+        assert msg[key] == value
 
 
 def test_fail_resourcemodules():
     """'resource modules' should fail validation."""
-    c = ChromeManifest('resource modules foo', 'chrome.manifest')
+    c = chrome_manifest('resource modules foo')
     err = ErrorBundle()
     err.save_resource('chrome.manifest', c)
 
@@ -59,7 +57,7 @@ def test_fail_resourcemodules():
     assert err.failed()
 
     # Fail even if it's just a prefix.
-    c = ChromeManifest('resource modulesfoo', 'chrome.manifest')
+    c = chrome_manifest('resource modulesfoo')
     err = ErrorBundle()
     err.save_resource('chrome.manifest', c)
 
@@ -71,12 +69,12 @@ def test_content_instructions():
     """Test that banned content namespaces are banned."""
 
     err = ErrorBundle()
-    c = ChromeManifest('content foo bar', 'chrome.manifest')
+    c = chrome_manifest('content foo bar')
     err.save_resource('chrome.manifest', c)
     tc_chromemanifest.test_content_instructions(err)
     assert not err.failed()
 
-    c = ChromeManifest('content godlikea bar', 'chrome.manifest')
+    c = chrome_manifest('content godlikea bar')
     err.save_resource('chrome.manifest', c)
     tc_chromemanifest.test_content_instructions(err)
     assert err.failed()
@@ -86,7 +84,7 @@ def test_content_missing_information():
     """Test that incomplete information in a content instruction fails."""
 
     err = ErrorBundle()
-    c = ChromeManifest('content foo', 'chrome.manifest')
+    c = chrome_manifest('content foo')
     err.save_resource('chrome.manifest', c)
     tc_chromemanifest.test_content_instructions(err)
     assert err.failed()
@@ -96,15 +94,14 @@ def test_content_instructions_trailing_slash():
     """Test that trailing slashes are necessary for content instructions."""
 
     err = ErrorBundle()
-    c = ChromeManifest('content namespace /uri/goes/here', 'chrome.manifest')
+    c = chrome_manifest('content namespace /uri/goes/here')
     err.save_resource('chrome.manifest', c)
     tc_chromemanifest.test_content_instructions(err)
     assert not err.failed()
     assert err.notices
 
     err = ErrorBundle()
-    c = ChromeManifest('content namespace /uri/goes/here/ flag=true',
-                       'chrome.manifest')
+    c = chrome_manifest('content namespace /uri/goes/here/ flag=true')
     err.save_resource('chrome.manifest', c)
     tc_chromemanifest.test_content_instructions(err)
     assert not err.failed()

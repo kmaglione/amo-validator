@@ -1,7 +1,7 @@
 import validator.testcases.l10ncompleteness as l10n
 from validator.errorbundler import ErrorBundle
 from helper import _do_test
-from validator.constants import *
+from validator.constants import PACKAGE_DICTIONARY, PACKAGE_EXTENSION
 
 
 def test_pass():
@@ -23,7 +23,7 @@ def test_unlocalizable():
                       l10n.test_xpi,
                       failure=False,
                       set_type=PACKAGE_EXTENSION)
-    assert output.notices # Should alert about lack of locales
+    assert output.notices  # Should alert about lack of locales
 
 
 def test_localizable():
@@ -55,10 +55,10 @@ def test_missingfiles():
              set_type=PACKAGE_EXTENSION)
 
 
-def test_multiple_predicates():
+def test_multiple_packages():
     """
     Test that the manifest parser recognizes when there are multiple
-    predicates of the same type.
+    packages of the same type.
     """
 
     l10n.LOCALE_CACHE = {}
@@ -89,4 +89,3 @@ def test_subpackage():
     err.detected_type = PACKAGE_EXTENSION
     err.push_state()
     assert l10n.test_xpi(err, None) is None
-
