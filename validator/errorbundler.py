@@ -194,6 +194,7 @@ class ErrorBundle(object):
                 'for_appversions',
                 'compatibility_type',
                 'editors_only',
+                'context_data',
             )
 
             # This is absurd.

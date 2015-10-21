@@ -812,32 +812,42 @@ class NodeHandlers(Operators):
         # all functions until the end of the current scope. *shrug*
         scope = traverser.find_scope(scope_type='function')
 
+        scope_chain = list(traverser.contexts)
+
         @scope.cleanups.append
         def traverse_function():
-            with self.push_conditional():
-                with self.push_context('function'):
-                    if node['id']:
-                        # The function name, which should be bound within
-                        # its scope.
-                        wrapper = self.Identifier(node['id'], declare='var')
-                        wrapper.set_value(value, set_by='function name')
+            try:
+                # Ugh.
+                restore_scopes = list(traverser.contexts)
+                traverser.contexts[:] = scope_chain
 
-                    for param in node['params']:
-                        self.traverse(param, declare='var')
+                with self.push_conditional():
+                    with self.push_context('function'):
+                        if node['id']:
+                            # The function name, which should be bound within
+                            # its scope.
+                            wrapper = self.Identifier(node['id'],
+                                                      declare='var')
+                            wrapper.set_value(value, set_by='function name')
 
-                    for default in node['defaults']:
-                        # Default argument values.
-                        self.traverse(default)
+                        for param in node['params']:
+                            self.traverse(param, declare='var')
 
-                    if node['rest']:
-                        # A "rest" param: `function (a, b, c, ...rest)`
-                        self.traverse(node, 'rest', declare='var')
+                        for default in node['defaults']:
+                            # Default argument values.
+                            self.traverse(default)
 
-                    traverser.this_stack.append(traverser.wrap(const=True))
-                    try:
-                        self.traverse(node, 'body')
-                    finally:
-                        traverser.this_stack.pop()
+                        if node['rest']:
+                            # A "rest" param: `function (a, b, c, ...rest)`
+                            self.traverse(node, 'rest', declare='var')
+
+                        traverser.this_stack.append(traverser.wrap(const=True))
+                        try:
+                            self.traverse(node, 'body')
+                        finally:
+                            traverser.this_stack.pop()
+            finally:
+                traverser.contexts[:] = restore_scopes
 
         name = ''
         if node['id']:

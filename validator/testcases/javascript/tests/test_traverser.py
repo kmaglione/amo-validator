@@ -275,12 +275,11 @@ class TestTraverser(BaseTestTraverser):
                     assert find_variable('foo_thing') is global_
 
                     # However, if they don't exist when we try to get their,
-                    # wrapper, we raise a KeyError unless `instantiate` is
-                    # passed.
-                    with pytest.raises(KeyError):
-                        get_variable('foo_thing', instantiate=False)
+                    # wrapper, we don't return a wrapper unless `instantiate`
+                    # is passed.
+                    assert get_variable('foo_thing', instantiate=False) is None
 
-                    get_variable('foo_thing', instantiate=True)
+                    assert get_variable('foo_thing', instantiate=True)
 
-                    # It exists now, so no error.
-                    get_variable('foo_thing', instantiate=False)
+                    # It exists now, so expect a wrapper.
+                    assert get_variable('foo_thing', instantiate=False)

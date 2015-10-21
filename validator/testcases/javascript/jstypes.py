@@ -788,7 +788,12 @@ class JSObject(JSValue, Hookable):
         the property does not already exist, and `instantiate` is true,
         it will be instantiated, and marked as an inferred value."""
 
-        output = self._get(name, instantiate, **kw)
+        try:
+            output = self._get(name, instantiate, **kw)
+        except KeyError:
+            if instantiate:
+                raise
+            return None
 
         if not skip_hooks:
             output.fire_hooks('on_get', self, output, name=name)
@@ -953,7 +958,7 @@ class JSArray(JSObject):
             return value.as_int() in self
         return value.as_identifier() in self
 
-    def get(self, name, instantiate=True):
+    def get(self, name, instantiate=True, **kw):
         """Wrap `JSObject.get` to handle integer properties, which come from
         our `elements` list rather than our `data` dict, and the special
         `length` property, which always returns the length of `elements`.
@@ -977,7 +982,7 @@ class JSArray(JSObject):
 
             return self.set(index, Undefined)
 
-        return super(JSArray, self).get(name, instantiate)
+        return super(JSArray, self).get(name, instantiate, **kw)
 
     def set(self, name, value, **kw):
         """Wrap `JSObject.set` to handle integer properties, which are stored
@@ -1302,6 +1307,9 @@ class JSWrapper(Hookable):
 
     def __iter__(self):
         return self.value.__iter__()
+
+    def __len__(self):
+        return self.value.__len__()
 
     def __nonzero__(self):
         """Always treat JSWrapper instances as truthy, even though they behave
