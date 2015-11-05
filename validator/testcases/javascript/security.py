@@ -6,7 +6,7 @@ import re
 from validator.errorbundler import merge_description
 from ..regex.javascript import STRING_REGEXPS
 from .bootstrapped import if_jetpack
-from .jstypes import Global, Hook, Interfaces
+from .jstypes import Global, Hook, Interfaces, JSObject
 from .preferences import BANNED_PREF_BRANCHES, BANNED_PREF_REGEXPS
 from .xpcom import CONTRACT_ENTITIES
 
@@ -63,6 +63,18 @@ Interfaces.hook('nsIDOMGeoGeolocation',
 
 # Modules.
 
+@Global.hook(('**', 'loadSubScript'), 'on_call')
+def check_loadSubScript(this, args, callee):
+    scope = callee.traverser.global_
+    if len(args) > 0 and isinstance(args[1], JSObject):
+        scope = args[1]
+
+        if scope.name == 'securableModule':
+            return
+
+    callee.traverser.subscript_scopes.add(scope)
+
+
 @Global.hook(('Components', 'utils', 'import'), 'return')
 def check_import(this, args, callee):
     """Check Components.utils.import statements for dangerous modules."""
@@ -78,6 +90,14 @@ def check_import(this, args, callee):
                  'warning': 'Potentially dangerous JSM imported.'},
                 DANGEROUS_MODULES[module])
             this.traverser.warning(**kw)
+
+        scope = callee.traverser.wrap(JSObject())
+
+        if not module.startswith(('resource://gre/', 'resource:///',
+                                  'resource://services-sync/')):
+            callee.traverser.import_scopes.add(scope)
+
+        return scope
 
 
 DANGEROUS_MODULES = {}

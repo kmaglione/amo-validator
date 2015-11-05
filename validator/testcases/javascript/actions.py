@@ -484,8 +484,10 @@ class NodeHandlers(Operators):
     @node_handler
     def Program(self, node):
         """Node representing the entire body of a script."""
-        for elem in node['body']:
-            self.traverse(elem)
+        with self.push_context('block'):
+            self.traverser.block_scope = self.traverser.contexts[-1]
+            for elem in node['body']:
+                self.traverse(elem)
 
     @node_handler
     def BlockStatement(self, node):
@@ -1010,8 +1012,8 @@ class NodeHandlers(Operators):
             result = self.find_scope('function').get(name, instantiate=True)
 
         elif declare == 'const':
-            result = self.find_scope('function').get(name, instantiate=True,
-                                                     const=True)
+            result = self.find_scope('block').get(name, instantiate=True,
+                                                  const=True)
         elif declare == 'let':
             result = self.find_scope('block').get(name)
 

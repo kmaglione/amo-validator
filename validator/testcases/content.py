@@ -2,6 +2,7 @@ import hashlib
 import os
 import re
 from StringIO import StringIO
+from collections import defaultdict
 from zipfile import BadZipfile
 
 from regex import run_regex_tests
@@ -270,6 +271,72 @@ def test_packed_scripts(err, xpi_package):
 
         for i in range(len(script_bundle['state'])):
             err.pop_state()
+
+
+@decorator.register_test(tier=3)
+def test_block_scope(err, xpi_package):
+    """Test that variables declared with top-level `let` or `const` are not
+    on other scopes."""
+
+    WARNING = ('Since bug 1202902, variables declared at the top-level '
+               'using `let` or `const` are attached to a top-level block '
+               'scope, rather than to the global. Please use `var` '
+               'instead.')
+
+    let_map = err.resources.setdefault('toplevel_lets', defaultdict(list))
+
+    loose_vars = err.resources.setdefault('loose_vars', defaultdict(list))
+
+    for key, wrappers in let_map.items():
+        if key in loose_vars:
+            writers = [w.location for w in wrappers]
+            readers = [w.location for type_, w in loose_vars[key]]
+
+            for wrapper in wrappers:
+                if all(reader.file == wrapper.location.file
+                       for reader in readers):
+                    continue
+
+                wrapper.traverser.warning(
+                    err_id=('top_block_scope', 'declaration', 'exported'),
+                    warning='Top-level, block-scoped variables not exported',
+                    description=(
+                        'The top-level, block-scoped variable `{var}` has the '
+                        'same name as a variable accessed via '
+                        '`Components.utils.import` or `loadSubScript` '
+                        'elsewhere in your add-on. '
+                        'Variables declared with block scoping are not '
+                        'available via those import methods.'.format(var=key),
+                        WARNING),
+                    context_data={'identifier': key,
+                                  'reader': wrapper.location,
+                                  'writers': writers},
+                    location=wrapper.location)
+
+            for type_, wrapper in loose_vars[key]:
+                if all(writer.file == wrapper.location.file
+                       for writer in writers):
+                    continue
+
+                if type_ == 'import_scope':
+                    method = 'Components.utils.import'
+                else:
+                    method = 'loadSubScript'
+
+                wrapper.traverser.warning(
+                    err_id=('top_block_scope', type_, 'imported'),
+                    warning='Variable may not have been exported',
+                    description=(
+                        'You are attempting to access the variable `{var}` '
+                        'via `{method}`. A variable with this name was '
+                        'with block scoping, elsewhere in your add-on, '
+                        'and may not be accessible here.'
+                        .format(var=key, method=method),
+                        WARNING),
+                    context_data={'identifier': key,
+                                  'writer': wrapper.location,
+                                  'readers': readers},
+                    location=wrapper.location)
 
 
 @decorator.register_test(tier=2)

@@ -39,6 +39,10 @@ class Traverser(object):
 
         self.contexts = [self.global_]
 
+        self.block_scope = None
+        self.subscript_scopes = set()
+        self.import_scopes = set()
+
         self.node_handlers = actions.NodeHandlers(self)
 
         self.this_stack = []
@@ -107,6 +111,76 @@ class Traverser(object):
 
         return self._debug_level
 
+    def check_block_scope(self, scope):
+        """Check bindings in the top-level block scope for suspicious
+        patterns."""
+
+        WARNING = ('Since bug 1202902, variables declared at the top-level '
+                   'using `let` or `const` are attached to a top-level block '
+                   'scope, rather than to the global. Please use `var` '
+                   'instead.')
+
+        let_map = self.err.resources.setdefault('toplevel_lets',
+                                                defaultdict(list))
+        jsm_map = self.err.resources.setdefault('toplevel_jsm_lets',
+                                                defaultdict(list))
+
+        IGNORE_KEYS = {'Cc', 'Ci', 'Cu', 'Cr', 'Services', 'require', 'Loader'}
+
+        for key in scope:
+            wrapper = scope.get(key, skip_hooks=True)
+
+            if self.pollutable:
+                self.warning(
+                    err_id=('top_block_scope', 'declaration', 'shared'),
+                    warning='Top-level block declaration in a shared scope',
+                    description=('Since bug 1202902, variables declared with '
+                                 '`let` or `const` at the top-level now go '
+                                 'into a per-script block scope. If you are '
+                                 'depending on these variables being '
+                                 'available to other scripts in the same '
+                                 'document, please use `var` instead.'),
+                    context_data={'identifier': key,
+                                  'declared': wrapper.location},
+                    location=wrapper.location)
+
+            if key in IGNORE_KEYS or self.global_.has_builtin(key):
+                continue
+
+            let_map[key].append(wrapper)
+
+            exported_symbols = (scope.get('EXPORTED_SYMBOLS', False) or
+                                self.global_.get('EXPORTED_SYMBOLS', False))
+
+            if exported_symbols:
+                jsm_map[key].append(wrapper)
+
+            if key in self.global_:
+                other = self.global_.get(key, skip_hooks=True)
+
+                self.warning(
+                    err_id=('top_block_scope', 'declaration', 'shadow'),
+                    warning='Global variable shadowed by block scoped '
+                            'declaration',
+                    description=('A block-scoped declaration of `{var}` '
+                                 'shadows a global variable of the same name.'
+                                 .format(var=key),
+                                 WARNING),
+                    context_data={'identifier': key,
+                                  'declared': wrapper.location,
+                                  'masking': other.location},
+                    location=wrapper.location)
+
+        loose_vars = self.err.resources.setdefault('loose_vars',
+                                                   defaultdict(list))
+
+        for scope_set in ('subscript_scopes', 'import_scopes'):
+            for scope in getattr(self, scope_set):
+                for key in scope:
+                    wrapper = scope.get(key, skip_hooks=True)
+                    if wrapper.inferred:
+                        loose_vars[key].append((scope_set, wrapper))
+
     def run(self, data):
         """Traverse the entire parse tree from the given root node."""
 
@@ -120,6 +194,9 @@ class Traverser(object):
         except Exception:
             self.system_error(exc_info=sys.exc_info())
             return
+
+        if self.block_scope:
+            self.check_block_scope(self.block_scope)
 
         assert len(self.contexts) == 1
 
