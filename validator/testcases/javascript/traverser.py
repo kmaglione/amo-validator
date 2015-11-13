@@ -1,8 +1,10 @@
 from __future__ import absolute_import, print_function, unicode_literals
 
 import logging
+import os
 import sys
 from collections import defaultdict, namedtuple
+from functools import partial
 
 from validator import constants
 
@@ -120,12 +122,12 @@ class Traverser(object):
                    'scope, rather than to the global. Please use `var` '
                    'instead.')
 
-        let_map = self.err.resources.setdefault('toplevel_lets',
-                                                defaultdict(list))
-        jsm_map = self.err.resources.setdefault('toplevel_jsm_lets',
-                                                defaultdict(list))
+        IGNORE_KEYS = {'Cc', 'Ci', 'Cu', 'Cr', 'Loader', 'Services', 'require'}
 
-        IGNORE_KEYS = {'Cc', 'Ci', 'Cu', 'Cr', 'Services', 'require', 'Loader'}
+        let_map = self.err.resources.setdefault(
+            'toplevel_lets', defaultdict(partial(defaultdict, set)))
+
+        scope_name = os.path.basename(self.filename)
 
         for key in scope:
             wrapper = scope.get(key, skip_hooks=True)
@@ -147,13 +149,13 @@ class Traverser(object):
             if key in IGNORE_KEYS or self.global_.has_builtin(key):
                 continue
 
-            let_map[key].append(wrapper)
-
             exported_symbols = (scope.get('EXPORTED_SYMBOLS', False) or
                                 self.global_.get('EXPORTED_SYMBOLS', False))
 
+            let_map['subscript_scopes'][key].add((scope_name, wrapper))
+            let_map['global'][key].add((scope_name, wrapper))
             if exported_symbols:
-                jsm_map[key].append(wrapper)
+                let_map['import_scopes'][key].add((scope_name, wrapper))
 
             if key in self.global_:
                 other = self.global_.get(key, skip_hooks=True)
@@ -172,14 +174,19 @@ class Traverser(object):
                     location=wrapper.location)
 
         loose_vars = self.err.resources.setdefault('loose_vars',
-                                                   defaultdict(list))
+                                                   defaultdict(set))
+
+        for key in self.global_:
+            wrapper = scope.get(key, skip_hooks=True)
+            if wrapper.inferred:
+                loose_vars[key].add(('global', scope_name, wrapper))
 
         for scope_set in ('subscript_scopes', 'import_scopes'):
-            for scope in getattr(self, scope_set):
+            for scope_name, scope in getattr(self, scope_set):
                 for key in scope:
                     wrapper = scope.get(key, skip_hooks=True)
                     if wrapper.inferred:
-                        loose_vars[key].append((scope_set, wrapper))
+                        loose_vars[key].add((scope_set, scope_name, wrapper))
 
     def run(self, data):
         """Traverse the entire parse tree from the given root node."""

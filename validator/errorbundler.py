@@ -424,6 +424,21 @@ class ErrorBundle(object):
         else:
             self.resources[name] = resource
 
+    # Hack.
+    def add_script_load(self, target, script):
+        """Record the script `script` being loaded into the scope at
+        `target`."""
+        from collections import defaultdict
+        from os.path import basename
+        from urlparse import urlsplit
+
+        scope_map = self.resources.setdefault('script_scopes',
+                                              defaultdict(set))
+
+        target = basename(target)
+        script = basename(urlsplit(script).path)
+        scope_map[target].add(script)
+
     @property
     def is_nested_package(self):
         'Returns whether the current package is within a PACKAGE_MULTI'

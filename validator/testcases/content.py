@@ -3,6 +3,7 @@ import os
 import re
 from StringIO import StringIO
 from collections import defaultdict
+from functools import partial
 from zipfile import BadZipfile
 
 from regex import run_regex_tests
@@ -283,60 +284,62 @@ def test_block_scope(err, xpi_package):
                'scope, rather than to the global. Please use `var` '
                'instead.')
 
-    let_map = err.resources.setdefault('toplevel_lets', defaultdict(list))
+    let_map = err.resources.setdefault(
+        'toplevel_lets', defaultdict(partial(defaultdict, set)))
 
-    loose_vars = err.resources.setdefault('loose_vars', defaultdict(list))
+    loose_vars = err.resources.setdefault('loose_vars', defaultdict(set))
 
-    for key, wrappers in let_map.items():
-        if key in loose_vars:
-            writers = [w.location for w in wrappers]
-            readers = [w.location for type_, w in loose_vars[key]]
+    script_scopes = err.resources.setdefault('script_scopes', defaultdict(set))
 
-            for wrapper in wrappers:
-                if all(reader.file == wrapper.location.file
-                       for reader in readers):
-                    continue
+    for key in loose_vars:
+        for type_, scope_name, wrapper in loose_vars[key]:
+            if type_ == 'global':
+                matches = [w for s_n, w in let_map[type_][key]
+                           if s_n in script_scopes[scope_name]]
+            else:
+                matches = [w for s_n, w in let_map[type_][key]
+                           if (scope_name in (None, s_n) and
+                               wrapper.location.file != w.location.file)]
 
-                wrapper.traverser.warning(
-                    err_id=('top_block_scope', 'declaration', 'exported'),
+            if not matches:
+                continue
+
+            if type_ == 'import_scopes':
+                method = 'a scope returned by `Components.utils.import`'
+            elif type_ == 'subscript_scopes':
+                method = 'a scope modified by `loadSubScript`'
+            else:
+                method = 'a shared global scope'
+
+            wrapper.traverser.warning(
+                err_id=('top_block_scope', type_, 'imported'),
+                warning='Variable may not have been exported',
+                description=(
+                    'You are attempting to access the variable `{var}` '
+                    'from {method}. A variable with this name was declared '
+                    'with block scoping elsewhere in your add-on, '
+                    'and may not be accessible here.'
+                    .format(var=key, method=method),
+                    WARNING),
+                context_data={'identifier': key,
+                              'writers': [m.location for m in matches]},
+                location=wrapper.location)
+
+            for match in matches:
+                match.traverser.warning(
+                    err_id=('top_block_scope', type_, 'exported'),
                     warning='Top-level, block-scoped variables not exported',
                     description=(
                         'The top-level, block-scoped variable `{var}` has the '
-                        'same name as a variable accessed via '
-                        '`Components.utils.import` or `loadSubScript` '
+                        'same name as a variable accessed from {method} '
                         'elsewhere in your add-on. '
                         'Variables declared with block scoping are not '
-                        'available via those import methods.'.format(var=key),
-                        WARNING),
-                    context_data={'identifier': key,
-                                  'reader': wrapper.location,
-                                  'writers': writers},
-                    location=wrapper.location)
-
-            for type_, wrapper in loose_vars[key]:
-                if all(writer.file == wrapper.location.file
-                       for writer in writers):
-                    continue
-
-                if type_ == 'import_scope':
-                    method = 'Components.utils.import'
-                else:
-                    method = 'loadSubScript'
-
-                wrapper.traverser.warning(
-                    err_id=('top_block_scope', type_, 'imported'),
-                    warning='Variable may not have been exported',
-                    description=(
-                        'You are attempting to access the variable `{var}` '
-                        'via `{method}`. A variable with this name was '
-                        'with block scoping, elsewhere in your add-on, '
-                        'and may not be accessible here.'
+                        'available via those import methods.'
                         .format(var=key, method=method),
                         WARNING),
                     context_data={'identifier': key,
-                                  'writer': wrapper.location,
-                                  'readers': readers},
-                    location=wrapper.location)
+                                  'reader': wrapper.location},
+                    location=match.location)
 
 
 @decorator.register_test(tier=2)

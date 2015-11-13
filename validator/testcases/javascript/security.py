@@ -1,6 +1,7 @@
 """Tests which relate to the overall security of the browser."""
 from __future__ import absolute_import, print_function, unicode_literals
 
+import os.path
 import re
 
 from validator.errorbundler import merge_description
@@ -72,7 +73,13 @@ def check_loadSubScript(this, args, callee):
         if scope.name == 'securableModule':
             return
 
-    callee.traverser.subscript_scopes.add(scope)
+    filename = None
+    source = args[0].as_str()
+    if not source.endswith('>'):
+        # Does not end with a dirty string.
+        filename = os.path.basename(source)
+
+    callee.traverser.subscript_scopes.add((filename, scope))
 
 
 @Global.hook(('Components', 'utils', 'import'), 'return')
@@ -95,7 +102,12 @@ def check_import(this, args, callee):
 
         if not module.startswith(('resource://gre/', 'resource:///',
                                   'resource://services-sync/')):
-            callee.traverser.import_scopes.add(scope)
+            filename = None
+            if not module.endswith('>'):
+                # Does not end with a dirty string.
+                filename = os.path.basename(module)
+
+            callee.traverser.import_scopes.add((filename, scope))
 
         return scope
 

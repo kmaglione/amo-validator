@@ -19,10 +19,11 @@ SAFE_IFRAME_TYPES = ('content', 'content-primary', 'content-targetable', )
 TAG_NOT_OPENED = 'Tag (%s) being closed before it is opened.'
 
 DOM_MUTATION_HANDLERS = (
-        'ondomattrmodified', 'ondomattributenamechanged',
-        'ondomcharacterdatamodified', 'ondomelementnamechanged',
-        'ondomnodeinserted', 'ondomnodeinsertedintodocument', 'ondomnoderemoved',
-        'ondomnoderemovedfromdocument', 'ondomsubtreemodified', )
+    'ondomattrmodified', 'ondomattributenamechanged',
+    'ondomcharacterdatamodified', 'ondomelementnamechanged',
+    'ondomnodeinserted', 'ondomnodeinsertedintodocument', 'ondomnoderemoved',
+    'ondomnoderemovedfromdocument', 'ondomsubtreemodified',
+)
 UNSAFE_THEME_XBL = ('constructor', 'destructor', 'field', 'getter',
                     'implementation', 'setter', )
 
@@ -237,16 +238,16 @@ class MarkupParser(HTMLParser):
 
             if not any((key == 'id') for key, val, pos in attrs):
                 self.err.warning(
-                        err_id=('markup', 'starttag', 'prefwindow_id'),
-                        warning='`<prefwindow>` elements must have IDs.',
-                        description='`<prefwindow>` elements without `id` '
-                                    'attributes cause errors to be reported '
-                                    'in the error console and prevent '
-                                    'persistence of certain properties of the '
-                                    'dialog.',
-                        filename=self.filename,
-                        line=self.line,
-                        context=self.context)
+                    err_id=('markup', 'starttag', 'prefwindow_id'),
+                    warning='`<prefwindow>` elements must have IDs.',
+                    description='`<prefwindow>` elements without `id` '
+                                'attributes cause errors to be reported '
+                                'in the error console and prevent '
+                                'persistence of certain properties of the '
+                                'dialog.',
+                    filename=self.filename,
+                    line=self.line,
+                    context=self.context)
 
         elif tag in ('iframe', 'browser') and self.extension == 'xul':
             # Bork if XUL iframe has no type attribute
@@ -282,9 +283,9 @@ class MarkupParser(HTMLParser):
                   remote_src):
                 self.err.warning(('markup', 'starttag', 'iframe_type_unsafe'),
                                  'Typeless iframes/browsers must be local.',
-                                 'iframe and browser elements that lack a type '
-                                 'attribute must always have src attributes '
-                                 'that reference local resources.',
+                                 'iframe and browser elements that lack a '
+                                 'type attribute must always have src '
+                                 'attributes that reference local resources.',
                                  self.filename,
                                  line=self.line,
                                  context=self.context)
@@ -319,6 +320,7 @@ class MarkupParser(HTMLParser):
                         line=self.line,
                         context=self.context)
                 else:
+                    self.err.add_script_load(self.filename, src)
                     self.found_scripts.add(src)
 
         # Find CSS and JS attributes and handle their values like they
@@ -332,23 +334,23 @@ class MarkupParser(HTMLParser):
                 continue
 
             if (attr_name == 'xmlns:xbl' and
-                attr_value == 'http://www.mozilla.org/xbl'):
+                    attr_value == 'http://www.mozilla.org/xbl'):
                 self.xbl = True
 
             if (self.err.detected_type == PACKAGE_THEME and
-                attr_value.startswith(('data:', 'javascript:'))):
+                    attr_value.startswith(('data:', 'javascript:'))):
 
                 self.err.warning(
-                        err_id=('markup', 'starttag',
-                                'theme_attr_prefix'),
-                        warning='Attribute contains banned prefix',
-                        description=("A mark element's attribute contains a "
-                                     'prefix which is not allowed in full '
-                                     'themes.',
-                                     'Attribute: %s' % attr_name),
-                        filename=self.filename,
-                        line=self.line,
-                        context=self.context)
+                    err_id=('markup', 'starttag',
+                            'theme_attr_prefix'),
+                    warning='Attribute contains banned prefix',
+                    description=("A mark element's attribute contains a "
+                                 'prefix which is not allowed in full '
+                                 'themes.',
+                                 'Attribute: %s' % attr_name),
+                    filename=self.filename,
+                    line=self.line,
+                    context=self.context)
 
             if attr_name == 'style':
                 csstester.test_css_snippet(self.err,
@@ -371,11 +373,11 @@ class MarkupParser(HTMLParser):
                         line=self.line,
                         context=self.context)
 
+                self.err.add_script_load(self.filename, self.filename)
                 scripting.test_js_snippet(
                     err=self.err, data=attr_value,
                     filename=self.filename, line=position[0],
                     column=position[1], context=self.context)
-
 
             # Test for generic IDs
             if attr_name == 'id' and attr_value in GENERIC_IDS:
@@ -385,8 +387,8 @@ class MarkupParser(HTMLParser):
                     warning='Overlay contains generically-named IDs',
                     description='An overlay is using a generically-named ID '
                                 'that could cause compatibility problems with '
-                                'other add-ons. Add-ons must namespace all IDs '
-                                'in the overlay, in the same way that '
+                                'other add-ons. Add-ons must namespace all '
+                                'IDs in the overlay, in the same way that '
                                 'JavaScript objects must be namespaced.',
                     filename=self.filename,
                     line=self.line,
@@ -492,9 +494,11 @@ class MarkupParser(HTMLParser):
 
         # If this is an XML-derived language, everything must nest
         # properly. No overlapping tags.
+        #
+        # ^ Oh, basta, you really have no idea, do you...
         if (old_state != tag and
-            self.extension[0] == 'x' and
-            not self.strict):
+                self.extension[0] == 'x' and
+                not self.strict):
 
             self.err.warning(('markup',
                               'endtag',
@@ -513,11 +517,12 @@ class MarkupParser(HTMLParser):
         # Perform analysis on collected data.
         if data_buffer:
             if tag == 'script' and not script_type:
-                scripting.test_js_snippet(err=self.err, data=data_buffer,
-                                          filename=self.filename,
-                                          line=old_position[0],
-                                          column=old_position[1],
-                                          context=self.context)
+                self.err.add_script_load(self.filename, self.filename)
+                scripting.test_js_file(err=self.err, data=data_buffer,
+                                       filename=self.filename,
+                                       line=old_position[0],
+                                       column=old_position[1] + 1,
+                                       context=self.context)
             elif tag == 'style':
                 csstester.test_css_file(self.err, self.filename, data_buffer,
                                         old_line)
@@ -533,7 +538,7 @@ class MarkupParser(HTMLParser):
         rawdata = self.rawdata
 
         assert rawdata[i:i + 3] == '<![', \
-               'unexpected call to parse_marked_section()'
+            'unexpected call to parse_marked_section()'
 
         sectName, j = self._scan_name(i + 3, i)
         if j < 0:  # pragma: no cover
